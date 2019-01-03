@@ -6,26 +6,19 @@
 
 #Include all code in bin
 !bin/*.R
-!bin/*.sh
-!bin/*.py
-!bin/*.pl
+
 
 #Include all code in src
 !src/*.R
 !src/*.Rmd
-!src/*.sh
-!src/*.py
-!src/*.pl
+
 
 #Include documentation
 !results/*.txt
 !results/*.rst
 !results/*.md
-!data/*.txt
 !src/*.md
+!src/*.bib
 
-#Include result .sh
-!results/*/*.sh
-#Include .json files
-!bin/*.json
-
+#Include figures
+!src/index_files/figure-markdown_github/*.png
