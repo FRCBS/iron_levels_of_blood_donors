@@ -2,6 +2,38 @@ The effect of donation activity dwarfs the effect of lifestyle, diet and iron su
 ================
 Muriel Lobier
 
+``` r
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(janitor)
+library(tableone)
+library(stargazer)
+library(gridExtra)
+library(cowplot)
+library(broom)
+library(GGally)
+library(ggfortify)
+library(sjPlot)
+library(knitr)
+library(lubridate)
+library(HDInterval)
+library(car)
+library(relaimpo)
+library(sfsmisc)
+library(MASS)
+library(kableExtra)
+library(sfsmisc)
+library(brms)
+library(rstan)
+library(rms)
+library(modelr)
+library(tidybayes)
+library(ordinal)
+library(sjmisc)
+library(sjlabelled)
+library(lazerhawk)
+```
+
 Executive summary
 =================
 
@@ -9,21 +41,18 @@ This document includes all code necessary to run the analysis and produce the fi
 
 The analysis has three parts. In a first part we describe the study population and compute the prevalence of iron deficiency and anemia. In a second part, we use multivariate linear regression to identify the factors that co-vary with iron levels (using ferritin and sTfR) in the blood donor population. In a third part, we test whether ferritin levels affect donor self-reported health using ordinal logistic regression.
 
-Descriptive results
--------------------
-
-No particular comments.
-
-Self-reported health analysis
------------------------------
-
-We analyze the data with multiple linear regression. Despite a seemingly large N, the models with all 20 predictors do not appear to have sufficient stability as the significance of regressors can be modified by removing as few as one influential participant. we could remove these participants but it would be difficult to fully justify, as they are mostly no proper outliers on any dimension.
-
-Descriptive results
--------------------
-
 Data loading and preparation
 ============================
+
+``` r
+#Get unaveraged data
+# load("../results/R-objects/r02ss.matbyidsDa.rdata")
+load("../data/r02.fd.bd.all.rdata")
+
+indiv_donations_data <- output
+
+rm(output)
+```
 
 Load Data
 ---------
@@ -32,18 +61,98 @@ There are 2584 donors enrolled in the study.
 
 There are 2580 left once we remove donors that have no Ferritin or no Hb measurement for any donation event.
 
+``` r
+# Get sex for each donor
+blood_data_summary <- indiv_donations_data %>% 
+  group_by(donor) %>% 
+  summarise(sex=first(gender)) 
+
+# Get values for first study donation with the required measurements donation (regardless of donation type)
+# We remove events with no Ferritin and hb_v to be inline with from when the nb of previous donations were counted.
+# More info in datadictionnary.txt
+
+blood_values_init <- indiv_donations_data %>% 
+  filter(!is.na(Ferritin) & !is.na(Hb_v) ) %>% 
+  group_by(donor) %>% 
+  filter(date == min(date)) %>% 
+  dplyr::select(age,TransferrinR, Ferritin,Hb_v,CRP,DaysToPreviousFB, MCV, donor) %>% 
+  ungroup()
+
+
+blood_data_summary <- blood_data_summary %>% 
+  full_join(blood_values_init, by = "donor") 
+
+# We now add the demographic data
+load("../data/r02ds.donorData.rdata")
+dons <- output
+rm(output)
+
+# There are only 2584 donors in the dons df becasue 2 donors have no FB donations (data_dictionnary.txt)
+
+blood_data_summary <- dons %>%
+  inner_join(blood_data_summary, by = "donor") %>%
+  mutate(all_study_FB_donation_count = NonFinnDonorDonationCount_FB + YesFinnDonorDonationCount_FB) 
+```
+
 Demographic group specification and assignment
 ----------------------------------------------
 
 There are 17 women with no answer to the question regarding their menstrual status. Of these, 2 are older than 65. We impute these to no period so they can be included in the post-menopausal women. Other women are all under 55, thus their menstrual status cannot be ascertained.
 
+``` r
+older_donors <- filter(blood_data_summary, 
+                       sex == "Women" & is.na(QR79) & age > 55)$donor
+
+blood_data_summary <- blood_data_summary %>% 
+  mutate(QR79 = ifelse(donor %in% older_donors, "no_period", as.character(QR79))) 
+```
+
 Female donors with no menstruation response after imputation are removed: 14 donors.
+
+``` r
+nb_women_no_mesntruation_response <- blood_data_summary %>% filter(sex == "Women" & is.na(QR79)) %>% nrow()
+
+
+# remove female donors with no menstruation response
+blood_data_summary_final <- blood_data_summary %>% 
+  mutate(mens_ok = case_when(
+    sex == "Men" ~ "Men", 
+    sex == "Women" & !is.na(QR79)  ~ "Women",
+    TRUE ~ "NA")) %>% 
+  filter(mens_ok != "NA") 
+
+# We define the women's groups: 
+n_women_removed <- blood_data_summary_final %>% 
+  mutate(group = case_when(
+    sex == "Men" ~ "Men", 
+    sex == "Women" & (QR79 == "no_period" & age > 45) ~ "Post_menopause_women",
+    sex == "Women" & (QR79 == "no_period" & age <= 45) ~ "Women_pre_menop_no_mens",
+    sex == "Women" & (QR79 == "irregular_period" | QR79 == "regular_period") ~ "Pre_menopause_women",
+    TRUE ~ "NA")) %>% 
+  group_by(group) %>% 
+  filter(group ==  "Women_pre_menop_no_mens") %>% 
+  nrow()
+```
 
 We now define the following groups:
 
 -   pre-menopausal: regular or irregular menstruation reported
 -   post-menopausal: no menstruation reported and age equal to superior to 45
 -   donors younger than 45 and no reported menstruation are excluded (81 donors)
+
+``` r
+# We define the women's groups: 
+blood_data_summary_final <- blood_data_summary_final %>% 
+  mutate(group = case_when(
+    sex == "Men" ~ "Men", 
+    sex == "Women" & (QR79 == "no_period" & age > 45) ~ "Post_menopause_women",
+    sex == "Women" & (QR79 == "no_period" & age <= 45) ~ "Women_pre_menop_no_mens",
+    sex == "Women" & (QR79 == "irregular_period" | QR79 == "regular_period") ~ "Pre_menopause_women",
+    TRUE ~ "NA")) %>% 
+  filter(group != "Women_pre_menop_no_mens" & group != "NA") %>% 
+  droplevels() %>% 
+  mutate(group = ordered(group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men"))) 
+```
 
 Remove donors with missing data
 -------------------------------
@@ -54,27 +163,85 @@ We remove donors for which we do not have:
 
 -   CRP or sTfR: 3 donors
 
+``` r
+nb_NA_removed <- blood_data_summary_final %>%
+  filter(is.na(TransferrinR) | is.na(CRP) ) %>% 
+  nrow()
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  drop_na(TransferrinR, CRP) 
+```
+
 ### Donation history
 
 WE remove 41 donors who have not donated previously (They are missing the Nb of days since last FB donation variable)
+
+``` r
+new_donors_data <- blood_data_summary_final %>% 
+  filter(is.na(DaysToPreviousFB)) %>% 
+    mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women",
+                   group == "Post_menopause_women" ~ "Post-menopausal women",
+                   group == "Men" ~ "Men" ,
+                   TRUE~ "NA"),
+         group = ordered(group)) 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  drop_na(DaysToPreviousFB)
+```
 
 ### BMI
 
 We remove 21 donors for whom we do not have the BMI data:
 
+``` r
+nb_removed_questionnaire <- nb_women_no_mesntruation_response +
+                            blood_data_summary_final %>% filter(is.na(BMI)) %>% nrow() 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  filter(!is.na(BMI))
+```
+
 ### Smoking
 
 We remove 1 donors who did not answer the smoking question:
 
+``` r
+nb_removed_questionnaire <- nb_removed_questionnaire +
+                            blood_data_summary_final %>% filter(is.na(QR54)) %>% nrow() 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  filter(!is.na(QR54))
+```
+
 ### Pregnancy
 
 We remove 3 female donors who did not answer the pregnancy question:
+
+``` r
+nb_removed_questionnaire <- nb_removed_questionnaire +
+                            blood_data_summary_final %>% filter((group != "Men" & is.na(QR83))) %>% nrow() 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  filter(!(group != "Men" & is.na(QR83)))
+```
 
 ### Iron supplementation
 
 We remove 77 donors that did not answer properly to both questions if applicable.
 
 For the modelling, we impute a 0 (no supplementation) to iron\_comp\_c when the donor reports not being offered iron supplementation.
+
+``` r
+nb_removed_questionnaire <- nb_removed_questionnaire +
+                            blood_data_summary_final %>% 
+                              mutate(iron_comp_c = ifelse(iron_supp == FALSE, 0, iron_comp_c )) %>% 
+                              filter(is.na(iron_comp_c)) %>% 
+                              nrow() 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  mutate(iron_comp_c = ifelse(iron_supp == FALSE, 0, iron_comp_c )) %>% 
+  filter(!is.na(iron_comp_c))
+```
 
 ### Food and drink intake
 
@@ -89,6 +256,22 @@ For the modelling, we impute a 0 (no supplementation) to iron\_comp\_c when the 
 -   QR52: how often do you drink wine
 -   QR53: how often do you drink strong alcohol
 
+``` r
+donors_to_remove <- blood_data_summary_final %>% 
+  dplyr::select(donor, group, QR40,QR44, QR46, QR45, QR48, QR49, QR50,QR51, QR52, QR53) %>% 
+  gather(key= question, value = answer, -donor,-group) %>% 
+  filter(is.na(answer)) %>% 
+  dplyr::select(group, donor) %>% 
+  distinct(donor, group) 
+
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  filter(!donor %in% donors_to_remove$donor) 
+
+nb_removed_questionnaire <- nb_removed_questionnaire +
+                            donors_to_remove %>% nrow()
+```
+
 We remove 105 donors that did not answer these questions.
 
 ### Health self assessment
@@ -97,9 +280,25 @@ We remove 105 donors that did not answer these questions.
 
 We remove 3 donors who did not answer the health self-assessment question:
 
+``` r
+nb_removed_questionnaire <- nb_removed_questionnaire +
+                            blood_data_summary_final %>% filter(is.na(QR17)) %>% nrow() 
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  filter(!is.na(QR17))
+```
+
 ### Physical activity
 
 We remove 21 donors who did not answer the physical activity questions:
+
+``` r
+nb_removed_questionnaire <- nb_removed_questionnaire +
+                            blood_data_summary_final %>% filter(is.na(QR60) | is.na(QR61)) %>% nrow()
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  drop_na(QR60, QR61)
+```
 
 ### Total number of donors removed for missing questionnaire answers
 
@@ -116,8 +315,22 @@ As decided previously, we remove data according the following criteria:
 
 This amounts to 10 donors that are removed.
 
+``` r
+ blood_data_summary_final <- blood_data_summary_final %>% 
+   filter(BMI < 50 & CRP < 30 & Ferritin < 400)
+```
+
 Final group N
 -------------
+
+``` r
+blood_data_summary_final %>% 
+   mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(group) %>% 
+  summarise ( N = n()) %>% 
+  kable() 
+```
 
 <table>
 <thead>
@@ -160,6 +373,32 @@ Men
 Recoding of variables
 ---------------------
 
+``` r
+# We keep only the variables that are used in the analysis
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  dplyr::select(donor,group, sex, age,TwoYearsFromStartCount_FB,DaysToPreviousFB, Hb_v,
+       Ferritin, CRP, TransferrinR, MCV, DaysToPreviousFB,QR40,QR44, QR46, QR45, QR48, QR49, QR50,QR51, QR52, QR53, 
+       QR17, QR54, QR60, QR61, iron_comp_c, BMI,QR83, iron_supp) %>% 
+  rename(red_meat = QR40,
+         fruit_berries = QR44,
+         vegetables = QR45,
+         fruit_juices = QR46,
+         milk = QR48,
+         coffee = QR49,
+         tea = QR50,
+         beer = QR51,
+         wine = QR52,
+         liquor = QR53,
+         pregnancy = QR83,
+         self_perceived_health = QR17,
+         physical_act_daily = QR60,
+         physical_act_freq = QR61) %>% 
+    mutate(smoking = ifelse(QR54 == "no", "no", "yes"),
+         smoking = ordered(smoking, levels = c( "no",  "yes")),
+         pregnancy = ordered(pregnancy, levels = c( "no",  "yes")))
+```
+
 We recode the following variables:
 
 -   Food and non-alcoholic beverages
@@ -184,6 +423,46 @@ We use a linear scale from 1 to 4 for both food/non-alcoholic drinks and for alc
     -   "sometimes" or "daily" ~ "yes"
 -   QR83: have you given birth ?
 
+``` r
+# Recode food and non-alcoholic beverages
+food <- blood_data_summary_final %>% 
+  dplyr::select(donor,red_meat, fruit_berries,vegetables,fruit_juices,milk, coffee, tea ) %>% 
+  gather(key = key, value =  value, -donor) %>% 
+  mutate(linear_value = case_when(value == "never" ~ 1,
+    value == "less_than_once_weekly" ~ 2,
+    value %in% c("1.3_week" , "4.6_week") ~ 3,
+    TRUE   ~ 4 )) %>% # "daily" | "several_daily"
+  dplyr::select(-value) %>% 
+  mutate(key = paste(key, "n", sep = "_")) %>% 
+  spread(key = key, value = linear_value)
+  
+alcohol <- blood_data_summary_final %>% 
+  dplyr::select(donor,beer, wine,liquor) %>% 
+  gather(key = key, value =  value, -donor) %>% 
+  mutate(linear_value = case_when(value %in% c( "never" , "very_rarely") ~ 1,
+    value == "a_few_per_month" ~ 2,
+    value == "a_few_per_week" ~ 3,
+    TRUE ~ 4)) %>% # daily_or_almost
+  dplyr::select(-value) %>% 
+  mutate(key = paste(key, "n", sep = "_")) %>% 
+  spread(key = key, value = linear_value)
+
+blood_data_summary_final <- blood_data_summary_final %>% 
+  full_join(food, by = "donor") %>% 
+  full_join(alcohol, by = "donor") 
+
+blood_data_summary_final <-
+  blood_data_summary_final %>% 
+  mutate(physical_act_daily_n = case_when(physical_act_daily == "under_15mn" ~ 0,
+                                        physical_act_daily == "15_30mn" ~ 1,
+                                        physical_act_daily == "30_60mn" ~ 2,
+                                        TRUE ~ 3),
+         physical_act_freq_n = case_when(physical_act_freq == "never" | physical_act_freq == "less_than_monthly" ~ 0,
+                                        physical_act_freq == "1_2_monthly" ~ 1,
+                                        physical_act_freq == "1_weekly" ~ 2,
+                                        TRUE ~ 3))
+```
+
 Results - Population description
 ================================
 
@@ -198,6 +477,82 @@ We code iron supplementation as a linear variable with a 4 grade scale:
 -   1: less than half offered supplementation taken
 -   2: half or more offered supplementation taken
 -   4: All or nearly all offered supplementation taken
+
+``` r
+# Recode food and non-alcoholic beverages
+food <- blood_data_summary_final %>% 
+  dplyr::select(donor,red_meat_n, fruit_berries_n,vegetables_n,fruit_juices_n,milk_n, coffee_n, tea_n ) %>% 
+  gather(key = key, value =  value, -donor) %>% 
+  mutate(value = case_when(value == 1 ~ "never",
+    value == 2 ~ "less_than_once_weekly",
+    value == 3 ~ "1_to_6_week",
+    TRUE   ~ "daily_or_more" ),
+    value = ordered(value, 
+                    levels =  c( "never", "less_than_once_weekly", 
+                               "1_to_6_week","daily_or_more"))) %>% 
+  mutate(key = str_replace(key, "_n", "")) %>% 
+  spread(key = key, value = value) 
+
+
+alcohol <- blood_data_summary_final %>% 
+  dplyr::select(donor,beer_n, wine_n,liquor_n) %>% 
+  gather(key = key, value =  value, -donor) %>% 
+ mutate(value = case_when(value == 1 ~ "rarely_or_never",
+    value == 2 ~ "a_few_per_month",
+    value == 3 ~ "a_few_per_week",
+    TRUE   ~ "daily_or_almost" ),
+    value = ordered(value, 
+                    levels =  c( "rarely_or_never", "a_few_per_month", 
+                               "a_few_per_week","daily_or_almost"))) %>% 
+  mutate(key = str_replace(key, "_n", "")) %>% 
+  spread(key = key, value = value) 
+
+
+
+
+blood_data_summary_tbl <- blood_data_summary_final %>% 
+  dplyr::select(donor,group, age,TwoYearsFromStartCount_FB,DaysToPreviousFB, Hb_v,
+       Ferritin, TransferrinR,  CRP, DaysToPreviousFB, iron_comp_c, BMI,smoking,pregnancy,
+       physical_act_freq, physical_act_daily) %>%
+  full_join(food, by = "donor") %>%
+  full_join(alcohol, by = "donor") %>%
+    mutate(iron_supplementation = case_when(
+    iron_comp_c == 3 ~ "All or almost all",
+    iron_comp_c == 2 ~ "About half",
+    iron_comp_c == 1 ~ "Less than half",
+    TRUE ~ "None"),
+    iron_supplementation = ordered(iron_supplementation, 
+                  levels = c("None",   "Less than half", "About half","All or almost all")),
+    physical_act_freq = case_when(physical_act_freq == "never" | physical_act_freq == "less_than_monthly" ~ "less_than_monthly",
+                                        physical_act_freq == "1_2_monthly" ~ "1_2_monthly",
+                                        physical_act_freq == "1_weekly" ~ "1_weekly",
+                                        TRUE ~ "twice_weekly_or_more"),
+    physical_act_freq = ordered(physical_act_freq, 
+                  levels = c("less_than_monthly",   "1_2_monthly", "1_weekly","twice_weekly_or_more"))) 
+```
+
+``` r
+myVars <- c( "age", "BMI" ,"smoking", "pregnancy", "Hb_v",  "Ferritin", "TransferrinR",  "CRP", "TwoYearsFromStartCount_FB", 
+             "DaysToPreviousFB",  "iron_supplementation", "red_meat", "vegetables",  "fruit_berries", "milk", 
+            "fruit_juices", "coffee", "tea", "beer",  "wine", "liquor", "physical_act_daily",  "physical_act_freq")
+
+non_normal_vars <- c("DaysToPreviousFB", "Ferritin", "TransferrinR", "CRP", "BMI")
+
+summary_table <- CreateTableOne(data = blood_data_summary_tbl %>% mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women", 
+                                                                                               Post_menopause_women = "Post-menopausal women")) ,
+                                vars = myVars, strata = "group",test = FALSE)
+
+# print(summary_table, nonnormal = non_normal_vars)
+```
+
+``` r
+# CreateTableOne(data = blood_data_summary_tbl,  vars = myVars, strata = "group" )
+
+tab3Mat <- print(summary_table, nonnormal = non_normal_vars, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
+
+tab3Mat %>% 
+  kable()
+```
 
 <table>
 <thead>
@@ -1243,6 +1598,11 @@ twice\_weekly\_or\_more
 </tr>
 </tbody>
 </table>
+``` r
+## Save to a CSV file
+write.csv(tab3Mat, file = "../results/tables/Table_1_population.csv")
+```
+
 Paired group differences
 ------------------------
 
@@ -1251,6 +1611,203 @@ We test for significant differences between group pairs with the relevant tests:
 -   Independent t-tests for normally distributed variables
 -   Mann-Whitney U test for non-normally distributed variables
 -   *χ*<sup>2</sup> test for categorical variables
+
+``` r
+# Test for normally distributed variables
+
+get_t_test_norm <- function(data, excluded_group){
+  
+data %>% 
+  dplyr::select(donor, group,age, Hb_v, TwoYearsFromStartCount_FB ) %>%
+  filter(group != excluded_group) %>% 
+  gather(key = variable, value = value, -donor, -group) %>% 
+  droplevels() %>% 
+  group_by(variable) %>% 
+  do(tidy(t.test(value~group, var.equal = TRUE, data = .))) %>% 
+  dplyr::select(variable, statistic, p.value, method) %>% 
+  mutate(contrast = case_when(
+    excluded_group == "Men" ~ "pre-menop vs post-menop",
+    excluded_group == "Post_menopause_women" ~ "pre-menop vs men",
+    TRUE ~ "post-menop vs men" )) -> result
+    
+    return(result)
+}
+
+for (excluded_group in levels(blood_data_summary_final$group)){
+  if(!exists("t_test_norm")){
+    t_test_norm <-  get_t_test_norm(blood_data_summary_tbl, excluded_group )
+  }else{
+    t_test_norm <-bind_rows(t_test_norm,  get_t_test_norm(blood_data_summary_tbl, excluded_group ))
+  }
+ 
+}
+
+# Test for non-normally distributed variables
+
+get_mann_Whit_test_norm <- function(data, excluded_group){
+  
+data %>% 
+  dplyr::select(donor, group,DaysToPreviousFB, Ferritin, CRP, TransferrinR, BMI ) %>%
+  filter(group != excluded_group) %>% 
+  gather(key = variable, value = value, -donor, -group) %>% 
+  droplevels() %>% 
+  group_by(variable) %>% 
+  do(tidy(wilcox.test(value~group,  paired = FALSE, data = .))) %>% 
+  dplyr::select(variable, statistic, p.value, method) %>% 
+  mutate(contrast = case_when(
+    excluded_group == "Men" ~ "pre-menop vs post-menop",
+    excluded_group == "Post_menopause_women" ~ "pre-menop vs men",
+    TRUE ~ "post-menop vs men" )) -> result
+    
+    return(result)
+}
+
+for (excluded_group in levels(blood_data_summary_final$group)){
+  if(!exists("t_test_non_norm")){
+    t_test_non_norm <-  get_mann_Whit_test_norm(blood_data_summary_final,excluded_group )
+  }else{
+    t_test_non_norm <-bind_rows(t_test_non_norm,  get_mann_Whit_test_norm(blood_data_summary_final,excluded_group ))
+  }
+ 
+}
+
+
+# Test for categorical variables
+
+get_chisqr_test_cat <- function(data, excluded_group){
+  
+  # Recode food and non-alcoholic beverages
+  food <- data %>% 
+    dplyr::select(donor,red_meat, fruit_berries,vegetables,fruit_juices,milk, coffee, tea ) %>% 
+    gather(key = key, value =  value, -donor) %>% 
+    mutate(linear_value = case_when(value == "never" ~ "1",
+      value == "less_than_once_weekly" ~ "2",
+      value %in% c("1.3_week" , "4.6_week") ~ "3",
+      TRUE   ~ "4" )) %>% # "daily" | "several_daily"
+    dplyr::select(-value) %>% 
+    spread(key = key, value = linear_value)
+    
+  
+  alcohol <- data %>% 
+    dplyr::select(donor,beer, wine,liquor) %>% 
+    gather(key = key, value =  value, -donor) %>% 
+    mutate(linear_value = case_when(value %in% c( "never" , "very_rarely") ~ "1",
+      value == "a_few_per_month" ~ "2",
+      value == "a_few_per_week" ~ "3",
+      TRUE ~ "4")) %>% # daily_or_almost
+    dplyr::select(-value) %>% 
+    spread(key = key, value = linear_value)
+  
+  
+  data %>%
+    mutate(iron_comp_f = case_when(
+      iron_comp_c == 3 ~ "All or almost all",
+      iron_comp_c == 2 ~ "About half",
+      iron_comp_c == 1 ~ "Less than half",
+      iron_comp_c == 0 ~ "None",
+      TRUE ~ "NA")) %>% 
+    dplyr::select(donor,group, smoking,iron_comp_f, physical_act_freq, physical_act_daily) %>%  
+    mutate(physical_act_freq = case_when(physical_act_freq == "never" | physical_act_freq == "less_than_monthly" ~ "less_than_monthly",
+                                        physical_act_freq == "1_2_monthly" ~ "1_2_monthly",
+                                        physical_act_freq == "1_weekly" ~ "1_weekly",
+                                        TRUE ~ "twice_weekly_or_more"),
+    physical_act_freq = ordered(physical_act_freq, 
+                  levels = c("less_than_monthly", "1_2_monthly", "1_weekly","twice_weekly_or_more"))) %>% 
+    full_join(food, by = "donor") %>% 
+    full_join(alcohol, by = "donor") %>% 
+    filter(group != excluded_group) %>% 
+    gather(key = variable, value = value, -donor, -group) %>% 
+    droplevels() %>% 
+    group_by(variable, group, value) %>% 
+    summarise(Freq = n()) %>% 
+    ungroup() %>% 
+    group_by(variable) %>% 
+    do(tidy(chisq.test(xtabs(Freq ~ group + value,  data = .), simulate.p.value = FALSE))) %>% 
+    dplyr::select(variable, statistic, p.value, method) -> result 
+    
+  if(excluded_group == "Men"){
+    
+    data %>%
+    filter(group != excluded_group) %>% 
+      droplevels() %>% 
+    dplyr::select(donor,group, pregnancy) %>% 
+    group_by( group, pregnancy) %>% 
+    summarise(Freq = n()) %>% 
+    ungroup() %>% 
+    do(tidy(chisq.test(xtabs(Freq ~ group + pregnancy,  data = .)))) %>% 
+    dplyr::select(-parameter) %>% 
+    mutate(variable = "pregnancy") %>% 
+    bind_rows(result) -> result
+  } 
+  
+  
+  
+   result %>% 
+      mutate(contrast = case_when(
+        excluded_group == "Men" ~ "pre-menop vs post-menop",
+        excluded_group == "Post_menopause_women" ~ "pre-menop vs men",
+        TRUE ~ "post-menop vs men" )) -> result
+   
+   return(result)
+}
+
+
+for (excluded_group in levels(blood_data_summary_final$group)){
+  if(!exists("chi_sqr_test")){
+    chi_sqr_test <-  get_chisqr_test_cat(blood_data_summary_final,excluded_group )
+  }else{
+    chi_sqr_test <-bind_rows(chi_sqr_test,  get_chisqr_test_cat(blood_data_summary_final,excluded_group ))
+  }
+ 
+}
+
+# chi_sqr_test
+```
+
+``` r
+all_stat_test <- bind_rows(t_test_norm, t_test_non_norm, chi_sqr_test)
+
+## Apply holm's bonferroni p correction
+ 
+
+all_stat_test$p.value.adj <- p.adjust(all_stat_test$p.value, method = "holm") 
+
+
+final_p_values <- all_stat_test %>% 
+  dplyr::select( -statistic, -p.value) %>% 
+    mutate(p.value.adj.final = case_when(p.value.adj < .0001 ~ "p < .0001",
+                                       p.value.adj < .001 ~ "p < .001",
+                                       p.value.adj < .01 ~ "p < .01",
+                                       p.value.adj < .05 ~ "p < .05",
+                                       TRUE ~ "n.s.")) %>% 
+  dplyr::select( -p.value.adj) %>% 
+  spread(key = contrast, value = p.value.adj.final) %>% 
+  dplyr::select(-method) %>% 
+  inner_join(all_stat_test %>% dplyr::select(variable, method) %>% distinct) %>% 
+  ungroup() %>% 
+  mutate(variable = dplyr::recode(variable, Hb_v = "Hemoglobin",
+                           TwoYearsFromStartCount_FB = "Nb donations in last 2 years",
+                           TransferrinR = "sTfR",
+                           DaysToPreviousFB = "Nb of days since last donation",
+                           iron_comp_f = "Iron supplementation",
+                           red_meat = "Red meat",
+                           fruit_berries = "Fruit and berries",
+                           fruit_juices = "Fruit juices",
+                           physical_act_freq = "Exercise frequency",
+                           physical_act_daily = "Daily physical activity"),
+    variable = ordered(variable, levels = c("age",  "BMI" ,"smoking", "pregnancy",
+                                                 "Hemoglobin",  "Ferritin",  "CRP",  "sTfR",
+                              "Nb donations in last 2 years", "Nb of days since last donation",    
+             "Iron supplementation", "Red meat", "vegetables",  "Fruit and berries", "milk" , 
+            "Fruit juices", "coffee", "tea", "beer",  "wine", "liquor", "Exercise frequency", "Daily physical activity"))) %>% 
+  arrange(variable) %>% 
+  mutate(variable = as.character(variable))   
+```
+
+``` r
+final_p_values %>% 
+  kable()
+```
 
 <table>
 <thead>
@@ -1666,6 +2223,45 @@ Pearson's Chi-squared test
 </tr>
 </tbody>
 </table>
+``` r
+# Saving resuls of statistical tests to html file
+
+stargazer(final_p_values, type = "html", 
+          summary = FALSE, 
+          rownames = FALSE,
+          header = FALSE,
+          out = "../results/tables/table_1_p_values_paired.html",
+          initial.zero = FALSE, 
+          digits = 5)
+```
+
+    ## 
+    ## <table style="text-align:center"><tr><td colspan="5" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">variable</td><td>post-menop vs men</td><td>pre-menop vs men</td><td>pre-menop vs post-menop</td><td>method</td></tr>
+    ## <tr><td colspan="5" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">age</td><td>p < .0001</td><td>p < .0001</td><td>p < .0001</td><td>Two Sample t-test</td></tr>
+    ## <tr><td style="text-align:left">BMI</td><td>n.s.</td><td>p < .0001</td><td>p < .05</td><td>Wilcoxon rank sum test with continuity correction</td></tr>
+    ## <tr><td style="text-align:left">smoking</td><td>n.s.</td><td>n.s.</td><td>n.s.</td><td>Pearson's Chi-squared test with Yates' continuity correction</td></tr>
+    ## <tr><td style="text-align:left">pregnancy</td><td></td><td></td><td>p < .0001</td><td>Pearson's Chi-squared test with Yates' continuity correction</td></tr>
+    ## <tr><td style="text-align:left">Hemoglobin</td><td>p < .0001</td><td>p < .0001</td><td>p < .0001</td><td>Two Sample t-test</td></tr>
+    ## <tr><td style="text-align:left">Ferritin</td><td>p < .0001</td><td>p < .0001</td><td>p < .0001</td><td>Wilcoxon rank sum test with continuity correction</td></tr>
+    ## <tr><td style="text-align:left">CRP</td><td>p < .01</td><td>p < .0001</td><td>n.s.</td><td>Wilcoxon rank sum test with continuity correction</td></tr>
+    ## <tr><td style="text-align:left">sTfR</td><td>p < .001</td><td>n.s.</td><td>p < .01</td><td>Wilcoxon rank sum test with continuity correction</td></tr>
+    ## <tr><td style="text-align:left">Nb donations in last 2 years</td><td>p < .0001</td><td>p < .0001</td><td>p < .0001</td><td>Two Sample t-test</td></tr>
+    ## <tr><td style="text-align:left">Nb of days since last donation</td><td>p < .0001</td><td>p < .0001</td><td>p < .001</td><td>Wilcoxon rank sum test with continuity correction</td></tr>
+    ## <tr><td style="text-align:left">Iron supplementation</td><td>n.s.</td><td>p < .0001</td><td>p < .0001</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">Red meat</td><td>p < .0001</td><td>p < .0001</td><td>p < .0001</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">vegetables</td><td>p < .0001</td><td>p < .0001</td><td>n.s.</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">Fruit and berries</td><td>p < .0001</td><td>p < .0001</td><td>p < .0001</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">milk</td><td>n.s.</td><td>n.s.</td><td>n.s.</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">Fruit juices</td><td>p < .0001</td><td>p < .0001</td><td>p < .0001</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">coffee</td><td>p < .05</td><td>n.s.</td><td>p < .0001</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">tea</td><td>p < .0001</td><td>p < .001</td><td>n.s.</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">beer</td><td>p < .0001</td><td>p < .0001</td><td>n.s.</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">wine</td><td>p < .01</td><td>p < .01</td><td>p < .0001</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">liquor</td><td>p < .0001</td><td>p < .0001</td><td>p < .001</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">Exercise frequency</td><td>p < .05</td><td>n.s.</td><td>n.s.</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td style="text-align:left">Daily physical activity</td><td>p < .001</td><td>n.s.</td><td>p < .001</td><td>Pearson's Chi-squared test</td></tr>
+    ## <tr><td colspan="5" style="border-bottom: 1px solid black"></td></tr></table>
+
 Results - Distributions of hemoglobin, ferritin and sTfR
 ========================================================
 
@@ -1674,13 +2270,70 @@ Incidence of anemia and iron deficiency
 
 Unless otherwise specified, the thresholds used are the following:
 
--   Hb: 117 g/L for women, 134 g/L for men [Reference](https://www.terveyskirjasto.fi/terveyskirjasto/tk.koti?p_artikkeli=snk03031)
+-   Hb: 117 g/L for women, 134 g/L for men ([Reference](https://www.terveyskirjasto.fi/terveyskirjasto/tk.koti?p_artikkeli=snk03031))
 -   Ferritin: 15 for all groups
--   sTfR: 4.4 mg/L for women and 5 mg/L for men [Reference](https://huslab.fi/cgi-bin/ohjekirja/tt_show.exe?assay=4720&terms=trans)
+-   sTfR: 4.4 mg/L for women and 5 mg/L for men ([Reference](https://huslab.fi/cgi-bin/ohjekirja/tt_show.exe?assay=4720&terms=trans))
+
+``` r
+# Create a DF with the thresholds for each group. 
+
+threshold <- data.frame(group = c("Men", "Pre_menopause_women", "Post_menopause_women"), 
+                       CRP_thresh = c(3, 3,3),
+                       Hb_v_thresh = c(134, 117,117),
+                       Ferritin_thresh = c(15, 15,15),
+                       TransferrinR_thresh = c(5, 4.4, 4.4)) %>% 
+  mutate(group = ordered(group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men"))) 
+```
 
 ### Overall incidence of low hemoglobin, low ferritin and high sTfR
 
+``` r
+# Identify donors with abnormal values
+blood_data_summary_final <- blood_data_summary_final %>% 
+  left_join(threshold, by="group") %>%
+  mutate(low.fer = ifelse(Ferritin < Ferritin_thresh, TRUE, FALSE),
+         anemia = ifelse(Hb_v < Hb_v_thresh, TRUE, FALSE),
+         high.TfR = ifelse(TransferrinR > TransferrinR_thresh, TRUE, FALSE),
+       logFerritin = log(Ferritin)) %>% 
+  dplyr::select(-Ferritin_thresh, -Hb_v_thresh, -TransferrinR_thresh, -CRP_thresh)
+
+threshold2 <- 
+    threshold %>% 
+    mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women",
+                             group == "Post_menopause_women" ~ "Post-menopausal women",
+                             TRUE ~ "Men"),
+         group = ordered(group),
+         group = fct_rev(group)) 
+  
+new_donors_data <- new_donors_data %>% 
+  left_join(threshold2, by="group") %>%
+  mutate(low.fer = ifelse(Ferritin < Ferritin_thresh, TRUE, FALSE),
+         anemia = ifelse(Hb_v < Hb_v_thresh, TRUE, FALSE),
+         high.TfR = ifelse(TransferrinR > TransferrinR_thresh, TRUE, FALSE),
+       logFerritin = log(Ferritin)) %>% 
+  dplyr::select(-Ferritin_thresh, -Hb_v_thresh, -TransferrinR_thresh, -CRP_thresh)
+```
+
 The following table presents the proportion and 95%CI of donors with low hemoglobin, low ferritin or high sTfR for each demographic group.
+
+``` r
+data <- blood_data_summary_final %>% 
+  dplyr::select(donor, group, low.fer, anemia, high.TfR) %>% 
+  mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women",
+         Post_menopause_women = "Post-menopausal women")) %>% 
+  gather(key = key, value = value, -donor, -group) %>% 
+  group_by(group, key) %>% 
+  summarise(N_key = sum(value), N = n()) 
+
+data %>% 
+  bind_cols(data.frame(binconf(data$N_key, data$N))) %>% 
+  mutate(prev = paste(round(PointEst,3)*100,
+                      " (", round(Lower,3)*100,"-", 
+                      round(Upper,3)*100, ")", sep = "")) %>% 
+  dplyr::select(group, key, prev) %>% 
+  spread(key = group, value = prev) %>% 
+  kable()
+```
 
 <table>
 <thead>
@@ -1748,6 +2401,36 @@ low.fer
 
 We compute the proportion (and the 95%CI) of donors who have low ferritin only, high sTfR only and both low ferritin and high sTfR.
 
+``` r
+blood_data_summary_final <- 
+  blood_data_summary_final %>% 
+    mutate(ID_only = low.fer & !high.TfR,
+           ID_high_sTRF = low.fer & high.TfR,
+           high_sTRF_only = high.TfR & !low.fer,
+           either_or = low.fer | high.TfR) 
+
+data <- blood_data_summary_final %>% 
+  dplyr::select(donor, group, ID_only, ID_high_sTRF, high_sTRF_only) %>% 
+  gather(key = key, value = value, -donor, -group) %>% 
+  group_by(group, key) %>% 
+  summarise(N_key = sum(value), N = n()) 
+
+data %>% 
+  bind_cols(data.frame(binconf(data$N_key, data$N))) %>% 
+  mutate(prev = paste(round(PointEst,3)*100,
+                      " (", round(Lower,3)*100,"-", 
+                      round(Upper,3)*100, ")", sep = "")) %>% 
+  ungroup() %>% 
+  dplyr::select(group, key, prev) %>% 
+  mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women",
+                                      Post_menopause_women = "Post-menopausal women"),
+         key = dplyr::recode(key, ID_only = "Low ferritin only",
+                                  high_sTRF_only = "High sTfR only", 
+                                  ID_high_sTRF = "Both")) %>% 
+  spread(key = group, value = prev) %>% 
+  kable()
+```
+
 <table>
 <thead>
 <tr>
@@ -1813,6 +2496,32 @@ Low ferritin only
 ### Overlap between anemia (low hemoglobin) and iron deficiency
 
 Here we look at the proportion of donors with low hemoglobin that also exhibit iron deficiency ( coded as ID: low ferritin and/or high sTfR).
+
+``` r
+sum_data <-
+  blood_data_summary_final %>% 
+  filter(anemia) %>% 
+     mutate(low_fer_only = low.fer & !high.TfR,
+           low_fer_high_sTRF = low.fer & high.TfR,
+           high_sTRF_only = high.TfR & !low.fer,
+           ID = low.fer | high.TfR) %>% 
+          mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women",
+                                      Post_menopause_women = "Post-menopausal women")) %>% 
+         rename( Overall.iron.deficiency = ID,
+                 Low.ferritin.only = ID_only,
+                 High.sTfR.only = high_sTRF_only, 
+                 Both = ID_high_sTRF) 
+
+
+myVars <- c( "Overall.iron.deficiency", "Low.ferritin.only", "High.sTfR.only", "Both")
+
+summary_table <- CreateTableOne(data = sum_data,  vars = myVars, strata = "group" )
+
+tab3Mat <- print(summary_table, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
+
+tab3Mat %>% 
+  kable()
+```
 
 <table>
 <thead>
@@ -1937,6 +2646,31 @@ Both = TRUE (%)
 
 First we compute, the proportion of donors identified as iron deficient (either low ferritin or high sTfR) that have high sTfR but normal ferritin for a ferritin threshold of 15 *μ**g*/*L*.
 
+``` r
+myVars <- c("Low.ferritin.only", "High.sTfR.only", "Both")
+
+
+summary_table <- 
+ blood_data_summary_final %>% 
+  mutate(low.fer =  Ferritin < 15) %>% 
+    mutate(low_ferritin_only = low.fer & !high.TfR,
+           both = low.fer & high.TfR,
+           high_sTRF_only = high.TfR & !low.fer,
+           either_or = low.fer | high.TfR) %>% 
+    filter(either_or) %>%
+    mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women",
+                                      Post_menopause_women = "Post-menopausal women")) %>% 
+    rename(Low.ferritin.only = low_ferritin_only,
+           High.sTfR.only = high_sTRF_only, 
+           Both = both) %>% 
+    CreateTableOne( vars = myVars, strata = "group" )
+
+ tab3Mat <- print(summary_table, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
+
+tab3Mat %>% 
+  kable()
+```
+
 <table>
 <thead>
 <tr>
@@ -2038,6 +2772,28 @@ Both = TRUE (%)
 </tbody>
 </table>
 Then we compute, the same proportion of donors identified as iron deficient (either low ferritin or high sTfR) that have high sTfR but normal ferritin for a ferritin threshold of 30 *μ**g*/*L*.
+
+``` r
+summary_table <- 
+ blood_data_summary_final %>% 
+  mutate(low.fer =  Ferritin < 30) %>% 
+    mutate(low_ferritin_only = low.fer & !high.TfR,
+           both = low.fer & high.TfR,
+           high_sTRF_only = high.TfR & !low.fer,
+           either_or = low.fer | high.TfR) %>% 
+    filter(either_or) %>% 
+      mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women",
+                                      Post_menopause_women = "Post-menopausal women")) %>% 
+    rename(Low.ferritin.only = low_ferritin_only,
+           High.sTfR.only = high_sTRF_only, 
+           Both = both) %>% 
+  CreateTableOne( vars = myVars, strata = "group" )
+
+ tab3Mat <- print(summary_table, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
+
+tab3Mat %>% 
+  kable()
+```
 
 <table>
 <thead>
@@ -2141,6 +2897,17 @@ Both = TRUE (%)
 </table>
 Finally, for the same 30 *μ**g*/*L* ferritin threshold, we compute the proportion of donors with high sTfR who also have low ferritin.
 
+``` r
+blood_data_summary_final %>% 
+    mutate(low.fer =  Ferritin < 30) %>% 
+  filter(high.TfR) %>% 
+  mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women",
+                                Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(group) %>% 
+  summarise(Proportion.low.ferritin =mean(low.fer)) %>% 
+  kable()
+```
+
 <table>
 <thead>
 <tr>
@@ -2180,6 +2947,17 @@ Men
 </tbody>
 </table>
 Proportion of low ferritin donors who also have high sTfR:
+
+``` r
+blood_data_summary_final %>% 
+    mutate(low.fer =  Ferritin <= 30) %>% 
+  filter(low.fer) %>% 
+  mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women",
+                              Post_menopause_women = "Post-menopausal women")) %>% 
+  group_by(group) %>% 
+  summarise(Proportion.High.sTfR =mean(high.TfR)) %>% 
+  kable()
+```
 
 <table>
 <thead>
@@ -2223,6 +3001,21 @@ Men
 
 Here we check that high ferritin values for anemic donors was not a consequence of inflammation (high CRP). Results show that only one anemic donor has elevated CRP which could indicate inflammation.
 
+``` r
+blood_data_summary_final %>% 
+  filter(anemia) %>% 
+     mutate(ID_only = low.fer & !high.TfR,
+           ID_high_sTRF = low.fer & high.TfR,
+           high_sTRF_only = high.TfR & !low.fer,
+           either_or = low.fer | high.TfR) %>% 
+    mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal \n women",
+         Post_menopause_women = "Post-menopausal \n women")) %>% 
+  ggplot(aes(x = group, y = CRP, color = low.fer)) +
+  geom_jitter(height = 0.05, width = 0.25, shape = 1) + 
+  scale_color_discrete(name="Low\nferritin") +
+   scale_y_log10()
+```
+
 ![](index_files/figure-markdown_github/unnamed-chunk-35-1.png)
 
 Figure 1
@@ -2230,7 +3023,106 @@ Figure 1
 
 We plot sTfR as a function of ferritin, with color representing hemoglobin. Red lines represent threshold values for iron deficiency. Red circles indicate anemic donors whilst yellow crosses represent first-time donors who were not included in the analyses.
 
+``` r
+point_size = 1
+  low_ferritin <- min(blood_data_summary_final$Ferritin)
+  high_ferritin <- max(blood_data_summary_final$Ferritin)
+  
+  low_Hb <- min(blood_data_summary_final$Hb_v)
+  high_Hb<- max(blood_data_summary_final$Hb_v)
+  
+  low_sTRF <-min(blood_data_summary_final$TransferrinR, na.rm = TRUE)
+  high_sTRF<- max(blood_data_summary_final$TransferrinR, na.rm = TRUE)
+  
+  N_data <-
+    blood_data_summary_final %>%
+      group_by(group) %>% 
+      summarise(N = n()) %>% 
+      mutate(group_N = case_when(group == "Pre_menopause_women" ~ paste("Pre-menopausal women\n","N = ",N,sep="" ),
+                       group == "Post_menopause_women" ~ paste("Post-menopausal women\n","N = ",N,sep="" ),
+                       group == "Men" ~ paste("Men\n","N = ",N,sep="" ),
+                       TRUE~ "NA")) 
+  
+
+  
+   new_donors_data <- new_donors_data %>%
+     mutate(group = fct_rev(group))
+
+plt <- blood_data_summary_final %>%
+  mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women",
+                   group == "Post_menopause_women" ~ "Post-menopausal women",
+                   group == "Men" ~ "Men" ,
+                   TRUE~ "NA"),
+         group = ordered(group),
+         group = fct_rev(group)) %>%
+  ggplot(aes(x = Ferritin, y = TransferrinR)) +
+  geom_vline(data = threshold2,
+             aes(xintercept = Ferritin_thresh),
+             color = "dark red",
+             size = 0.3,
+             linetype = 2) +
+    geom_vline(xintercept = 30,
+             color = "dark red",
+             size = 0.3,
+             linetype = 3) +
+  geom_hline(data = threshold2,
+             aes(yintercept = TransferrinR_thresh),
+             color = "dark red",
+             size = 0.3,
+             linetype = 2) +
+  geom_point(aes(color = Hb_v), size = point_size, alpha = 0.5) +
+  geom_point(aes(alpha = anemia), shape = 1, color = "red", size = point_size*1.1 ) +
+  geom_point(data = new_donors_data, shape = 8, size = point_size, color = "orange") +
+  geom_point(data = new_donors_data, aes(alpha = anemia), shape = 1, color = "red", size = point_size*1.5) +
+  scale_color_viridis_c(direction = -1, option="D", trans = "log",
+                        limits = c(low_Hb, high_Hb),
+                        breaks=c(110, 117,134, 150, 175)) +
+  scale_alpha_discrete(range = c(0,1), guide=FALSE) +
+  scale_x_log10(limits = c(low_ferritin, high_ferritin)) +
+  scale_y_log10(limits = c(low_sTRF, high_sTRF)) +
+  theme_bw() +
+  facet_grid(group ~ .) + 
+               # labeller = label_wrap_gen(width = 2, multi_line = TRUE))  +
+  theme(legend.position = c(0.15, 0.65), 
+        panel.grid = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 10),
+        axis.line = element_line(colour="black"),
+        axis.title = element_text(size = 10),
+        # axis.title.y = element_blank(),
+        axis.text = element_text(size = 9),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 10),
+        legend.background = element_blank()) +
+    guides(color = guide_colorbar(barwidth = .75, barheight = 4, title = "Hb (g/l)")) +
+  xlab(expression("Ferritin ("*mu* "g/l)")) + ylab("sTFR (mg/l)")# +
+
+plt
+```
+
 ![](index_files/figure-markdown_github/unnamed-chunk-36-1.png)
+
+``` r
+ ggplot2::ggsave("../results/figures/fig_1.png", plt, height = 20, width = 8, units = "cm", dpi = 300)
+```
+
+``` r
+# Create labeller lookup table
+# http://ggplot2.tidyverse.org/reference/labeller.html
+group_labels <- c(
+  Pre_menopause_women = "Pre-menopausal women",
+  Post_menopause_women = "Post-menopausal women",
+  Men = "Men"
+  )
+blood_data_summary_final$group2 <- plyr::revalue(blood_data_summary_final$group,
+  group_labels) 
+
+
+threshold$group2 <- plyr::revalue(threshold$group,
+  group_labels) 
+```
 
 Population description - Iron supplementation
 ---------------------------------------------
@@ -2239,9 +3131,83 @@ Population description - Iron supplementation
 
 First we investigate the proportion of donors who report being offered iron.
 
+``` r
+blood_data_summary_final %>% 
+      mutate(group_N = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women" ,
+                       group == "Post_menopause_women" ~ "Post-menopausal women" ,
+                       group == "Men" ~ "Men" ,
+                       TRUE~ "NA"),
+            group_N = fct_rev(group_N)) %>% 
+  group_by(group_N) %>% 
+  summarise(proportion = mean(iron_supp)) %>% 
+    ggplot(aes(x = group_N, y = proportion, fill= group_N)) +
+  geom_col(position ="dodge") +
+  geom_text(aes(label=round(proportion,2)), position=position_dodge(width=0.9), vjust=0.5) +
+  scale_fill_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c( "Pre-menopausal women", "Post-menopausal women", "Men" )) +
+ theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 10),
+        axis.line = element_line(colour="black"),
+        # axis.text.x=element_text(angle=20,hjust=1),
+        axis.title.x =  element_text(size = 10),
+       axis.title.y =  element_text(size = 10),
+        axis.text = element_text(size = 10)) +
+  # scale_y_log10(breaks=c(5, 15,25,50,100)) +
+  xlab("Were you offered iron supplementation at your last visit?") +
+  ylab("Proportion")
+```
+
 <img src="index_files/figure-markdown_github/unnamed-chunk-38-1.png" width="75%" style="display: block; margin: auto;" />
 
 ### Compliance when iron supplementation was provided
+
+``` r
+blood_data_summary_final %>% 
+  filter(iron_supp) %>% 
+  mutate(iron_comp_f = case_when(iron_comp_c == 3 ~ "All or almost all",
+    iron_comp_c == 2 ~ "About half",
+    iron_comp_c == 1 ~ "Less than half",
+    iron_comp_c == 0 ~ "None",
+    TRUE ~ "NA"),
+    iron_comp_f = ordered(iron_comp_f, 
+                  levels = c("NA","None",   "Less than half", "About half","All or almost all"))) %>% 
+     mutate(group_N = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women" ,
+                       group == "Post_menopause_women" ~ "Post-menopausal women" ,
+                       group == "Men" ~ "Men" ,
+                       TRUE~ "NA"),
+            group_N = fct_rev(group_N)) %>% 
+  group_by(group_N, iron_comp_f) %>% 
+  summarise(N = n()) %>% 
+  ungroup() %>% 
+  group_by(group_N) %>% 
+  mutate(proportion = N/sum(N)) %>% 
+  # gather(key = count_type, value = value, -group, -iron_comp_f) %>%
+  ggplot(aes(x = iron_comp_f, y = proportion, fill= group_N)) +
+  geom_col(position ="dodge") +
+  geom_text(aes(label=round(proportion,2)), position=position_dodge(width=0.9), vjust=0.5) +
+  scale_fill_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c( "Pre-menopausal women", "Post-menopausal women", "Men" )) +
+  facet_grid(.~ group_N, 
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE)) +
+ theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 10),
+        axis.line = element_line(colour="black"),
+        axis.text.x=element_text(angle=20,hjust=1),
+        axis.title.x =  element_text(size = 8),
+       axis.title.y =  element_text(size = 8),
+        axis.text = element_text(size = 8)) +
+  # scale_y_log10(breaks=c(5, 15,25,50,100)) +
+  xlab("How much of the offered course of iron supplements did you take?") +
+  ylab("Proportion")
+```
 
 ![](index_files/figure-markdown_github/unnamed-chunk-39-1.png)
 
@@ -2259,9 +3225,11 @@ The regressors were entered as follows in the regression models for sTfR and fer
 
 -   Continuous variables were entered as continuous predictors
 -   age, number of donations in last two years, nb of days since last donation, CRP, BMI
+
 -   Binary variables were entered as categorical (but coded as numerical for relative importance):
 -   Smoking, pregnancy
--   Ordinal variables were coded on a linear scale and entered as continuous [REF](https://www3.nd.edu/~rwilliam/stats3/OrdinalIndependent.pdf)
+
+-   Ordinal variables were coded on a linear scale and entered as continuous [(Reference)](https://www3.nd.edu/~rwilliam/stats3/OrdinalIndependent.pdf)
 -   Iron supplementation
 -   All dietary intake
 
@@ -2272,55 +3240,206 @@ Pre-processing
 
 ### Rename and transform
 
+``` r
+blood_data_summary_reg <- blood_data_summary_final %>% 
+    rename(don_ct = TwoYearsFromStartCount_FB,
+            last_don = DaysToPreviousFB,
+            iron = iron_comp_c) %>% 
+     mutate(don_ct_2 = don_ct^2,
+            log_ferr = log(Ferritin),
+            log_last_don = log(last_don)/log(2),
+            log_CRP = log(CRP),
+            log_sTfR = log(TransferrinR)) 
+```
+
 Data transformations:
 
 -   Log transformed variables:
 -   Ferritin
 -   sTfR
 -   CRP
+
 -   Age is divided by 5 to simplify coeff interpretation
 -   Number of days before donation is transformed as *l**o**g*\_*l**a**s**t*\_*d**o**n* = *l**o**g*(*l**a**s**t*\_*d**o**n*)/*l**o**g*(2) to help with the interpretation of coefficients.
-    -   An increase in one of the transformed variable is equivalent to a doubling of the number of days since last donation.
+-   An increase in one of the transformed variable is equivalent to a doubling of the number of days since last donation.
+
 -   Standardization:
 -   Standardized coefficients:
     -   All dependent and independent variables were standardized
 -   Coefficients:
     -   All dependent variables entered as continuous varaibles are centered but not scaled.
 
-Pre\_menopausal women
----------------------
+Pre-menopausal women
+--------------------
 
 ### Data pre-processing
 
 We center all variables entered as continuous.
 
-### Regressions Ferritin
+``` r
+# Center variables
+
+test_data_std <- blood_data_summary_reg %>% 
+  filter(group == "Pre_menopause_women") %>% 
+  dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, 
+                fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n) %>% 
+  gather(key = key, value = value, -donor) %>% 
+  group_by(key) %>% 
+  mutate(value = scale(value, scale = FALSE)[,1]) %>% 
+  spread(key = key, value = value)
+  
+test_data_std <- blood_data_summary_reg %>% 
+  filter(group == "Pre_menopause_women") %>% 
+  dplyr::select(donor, log_ferr, TransferrinR, age, log_CRP, BMI, don_ct,log_last_don,smoking, pregnancy, iron, log_sTfR) %>%
+  mutate(age = age / 5, 
+         age = scale(age, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         don_ct = scale(don_ct, scale = FALSE)[,1],
+         log_last_don = scale(log_last_don, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         iron = scale(iron, scale = FALSE)[,1],
+         don_ct_2 = don_ct^2) %>% 
+  full_join(test_data_std, by = "donor")  %>% 
+  dplyr::select(-donor)
+```
+
+### Mutiple regression - ferritin as outcome
 
 #### Correlograms
 
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
+
 ![](index_files/figure-markdown_github/unnamed-chunk-42-1.png)
 
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "pregnancy",  "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
+
 ![](index_files/figure-markdown_github/unnamed-chunk-43-1.png)
+
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "coffee_n", "tea_n", "beer_n", "wine_n", "liquor_n"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
 
 ![](index_files/figure-markdown_github/unnamed-chunk-44-1.png)
 
 #### OLS
 
+``` r
+lm7_pre_menop_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+```
+
 ##### Model diagnostics
 
 We create regression diagnostic plots in order to identify putative influential observations (see [Understanding Diagnostic Plots for Linear Regression Analysis](http://data.library.virginia.edu/diagnostic-plots/)).
 
-![](index_files/figure-markdown_github/unnamed-chunk-46-1.png)![](index_files/figure-markdown_github/unnamed-chunk-46-2.png)
+``` r
+test_data_std %>%
+  rowid_to_column("ID") %>%
+  mutate(outlier = ifelse(ID == 547 | ID == 561 | ID == 297 | ID == 59 | ID == 723, TRUE, FALSE)) -> test_data_std
+
+autoplot(lm7_pre_menop_std, data = test_data_std, which = c(1:6), ncol = 3,  label.n = 5,
+         alpha = 0.7, shape = 1, colour = "outlier") + 
+  scale_color_manual(values = c( "black",  "red") )+
+  theme_bw() + theme(legend.position = "none") 
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-46-1.png)
+
+``` r
+pre_menop_diag_plot <- autoplot(lm7_pre_menop_std, data = test_data_std, which = c(1:2,6), ncol = 1, 
+         alpha = 0.7, shape = 1, colour = "outlier", label.alpha = 0, size = 0.5) + 
+  scale_color_manual(values = c( "dark grey",  "red") )+
+  theme_classic() + theme(legend.position = "none") 
+
+ggplot2::ggsave("../results/figures/supp_fig_3_pre_menop.svg", pre_menop_diag_plot, 
+                    height = 11.5 * 1.25, width = 11.5 * 1.25/3, units = "cm", dpi = 300)
+
+  
+pre_menop_diag_plot
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-46-2.png)
 
 These plots identify several potentially problematic observations, therefore we also compute robust regression.
 
-#### Robust regression model amd p-values
+#### Robust regression model and p-values
+
+``` r
+# https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+
+# Run model 
+robust_mdl_pre_menop_w <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+
+#Tidy output
+tidy_mdl <- tidy(robust_mdl_pre_menop_w)
+# %>% 
+#   filter(term != "(Intercept)")
+
+# Compute p-values
+regressor_list <- tidy_mdl$term
+p_values <- rep(0,length(regressor_list ))
+for (i in c(1:length(regressor_list))){
+  p_values[[i]]<-f.robftest(robust_mdl_pre_menop_w, var = regressor_list[[i]])[[7]]
+}
+
+mdl_pre_menop_w <- tidy_mdl %>% 
+  full_join(data.frame(term = regressor_list, p_value=p_values),
+                      by="term") %>% 
+  mutate(significance = case_when(
+    p_value < 0.0001 ~ "p < 0.0001", 
+    p_value < 0.001 ~ "p < 0.001", 
+    p_value < 0.01 ~ "p < 0.01",
+    p_value < 0.05 ~ "p < 0.05",
+    TRUE ~"n.s."
+  )) %>% 
+  dplyr::select(-std.error, -statistic) 
+
+# Save model in tidy form for future use
+tidy_model_w_pre <- tidy(robust_mdl_pre_menop_w)
+```
 
 #### Model outputs and interpretation
 
+``` r
+stargazer( robust_mdl_pre_menop_w, lm7_pre_menop_std,
+          title = "Multiple linear regressions - Pre-menopausal women",
+          intercept.bottom = FALSE,
+          type = "html",
+          single.row = TRUE,
+          omit = "Constant",
+          ci = FALSE,
+          header = FALSE,
+          dep.var.caption   = "Ferritin (log)", 
+          dep.var.labels.include = FALSE,
+          model.names = FALSE,
+          model.numbers = FALSE,
+          column.labels = c("Robust", "OLS"),
+          covariate.labels =  c("Age", "BMI", "CRP", "Smoking(yes)",  "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
+                        "Iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          report=('vcp'))
+```
+
 <table style="text-align:center">
 <caption>
-<strong>Pre-menopausal women</strong>
+<strong>Multiple linear regressions - Pre-menopausal women</strong>
 </caption>
 <tr>
 <td colspan="3" style="border-bottom: 1px solid black">
@@ -2833,3033 +3952,127 @@ Results from robust and OLS rergessions are similar. Ferritin levels are positiv
 
 The relative importance analyses are run only on regressors that are consistently significant in at least one demographic group.
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+``` r
+test_data_2_std<- test_data_std %>% 
+  mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+lm7_num_std <- lm(log_ferr ~ age + BMI + don_ct + don_ct_2 + log_last_don + smoking + iron + red_meat_n + wine_n + beer_n, test_data_2_std)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+plotdata <- booteval.relimp(bootresult, typesel = c("pmvd"), level = 0.95)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+plot_data_lm7_pre_menop <- data_frame(regressor = names(plotdata@first),
+                        lmg = plotdata@pmvd,
+                        lmg_inf = plotdata@pmvd.lower[1,],
+                        lmg_sup = plotdata@pmvd.upper[1,]) 
+```
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-### Regressions sTfR
+### Mutiple regression - sTfR as outcome
 
 ##### Correlograms
+
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_sTfR", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
 
 ![](index_files/figure-markdown_github/unnamed-chunk-51-1.png)
 
 #### OLS
 
+``` r
+lm7_pre_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+```
+
 ###### Model diagnostics
 
-![](index_files/figure-markdown_github/unnamed-chunk-53-1.png)![](index_files/figure-markdown_github/unnamed-chunk-53-2.png)
+``` r
+test_data_std %>%
+  # rowid_to_column("ID") %>%
+  mutate(outlier = ifelse(ID == 60 | ID == 537 | ID == 567 | ID == 814 , TRUE, FALSE)) -> test_data_std
+
+autoplot(lm7_pre_menop_sTfR, data = test_data_std, which = c(1:6), ncol = 3, label.n = 5,
+         shape = 1, alpha = 0.7, colour = "outlier") + 
+  scale_color_manual(values = c( "black",  "red") )+
+  theme_bw() + theme(legend.position = "none") 
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-53-1.png)
+
+``` r
+pre_menop_diag_plot <- autoplot(lm7_pre_menop_sTfR, data = test_data_std, which = c(1:2,6), ncol = 1, 
+         shape = 1, alpha = 0.7, colour = "outlier", label.alpha = 0, size = 0.5) + 
+  scale_color_manual(values = c( "dark grey",  "red") )+
+  theme_classic() + theme(legend.position = "none") 
+
+ggplot2::ggsave("../results/figures/supp_fig_3_pre_menop_sTfR.svg", pre_menop_diag_plot, 
+                    height = 11.5 * 1.25, width = 11.5 * 1.25/3, units = "cm", dpi = 300)
+
+  
+pre_menop_diag_plot
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-53-2.png)
 
 #### Robust regression model amd p-values
 
+``` r
+# https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+
+# Run model 
+robust_mdl_sTfR_pre_menop_w <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+
+#Tidy output
+tidy_mdl <- tidy(robust_mdl_sTfR_pre_menop_w)
+
+# Compute p-values
+regressor_list <- tidy_mdl$term
+p_values <- rep(0,length(regressor_list ))
+for (i in c(1:length(regressor_list))){
+  p_values[[i]]<-f.robftest(robust_mdl_sTfR_pre_menop_w, var = regressor_list[[i]])[[7]]
+}
+
+mdl_sTfR_pre_menop_w <- tidy_mdl %>% 
+  full_join(data.frame(term = regressor_list, p_value=p_values),
+                      by="term") %>% 
+  mutate(significance = case_when(
+    p_value < 0.0001 ~ "p < 0.0001", 
+    p_value < 0.001 ~ "p < 0.001", 
+    p_value < 0.01 ~ "p < 0.01",
+    p_value < 0.05 ~ "p < 0.05",
+    TRUE ~"n.s."
+  )) %>% 
+  dplyr::select(-std.error, -statistic) 
+```
+
 #### Model outputs and interpretation
+
+``` r
+stargazer(robust_mdl_sTfR_pre_menop_w, lm7_pre_menop_sTfR, 
+          title = "Pre-menopausal women",
+          intercept.bottom = FALSE,
+          type = "html",
+          single.row = TRUE,
+          omit = "Constant",
+          ci = FALSE,
+          header = FALSE,
+          dep.var.caption   = "sTfR", 
+          dep.var.labels.include = FALSE,
+          model.names = FALSE,
+          model.numbers = FALSE,
+          column.labels = c("Robust", "OLS"),
+          covariate.labels =  c("Age", "BMI", "CRP", "Smoking(yes)",  "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          report=('vcp'))
+```
 
 <table style="text-align:center">
 <caption>
@@ -6368,3048 +4581,185 @@ F Statistic
 
 The relative importance analyses are run only on regressors that are consistently significant in at least one demographic group.
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+``` r
+test_data_2_std<- test_data_std %>% 
+  mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking  + red_meat_n + wine_n + beer_n + milk_n, test_data_2_std)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+plotdata <- booteval.relimp(bootresult, typesel = c("pmvd"), level = 0.95)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+plot_data_lm7_pre_menop_sTfR <- data_frame(regressor = names(plotdata@first),
+                        lmg = plotdata@pmvd,
+                        lmg_inf = plotdata@pmvd.lower[1,],
+                        lmg_sup = plotdata@pmvd.upper[1,]) 
+```
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-Post\_menopausal women
-----------------------
+Post-menopausal women
+---------------------
 
 ### Data pre-processing
 
 We center all variables entered as continuous.
 
-### Regression Ferritin
+``` r
+# Center and standardize variables
+
+test_data_std <- blood_data_summary_reg %>% 
+  filter(group == "Post_menopause_women") %>% 
+  dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, 
+                fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n) %>% 
+  gather(key = key, value = value, -donor) %>% 
+  group_by(key) %>% 
+  mutate(value = scale(value, scale = FALSE)[,1]) %>% 
+  spread(key = key, value = value)
+  
+test_data_std <- blood_data_summary_reg %>% 
+  filter(group == "Post_menopause_women") %>% 
+  dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct,log_last_don,smoking, pregnancy, iron) %>% 
+  mutate(age = age / 5, 
+         age = scale(age, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         don_ct = scale(don_ct, scale = FALSE)[,1],
+         log_last_don = scale(log_last_don, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         iron = scale(iron, scale = FALSE)[,1],
+         don_ct_2 = don_ct^2) %>% 
+  full_join(test_data_std, by = "donor")  %>% 
+  dplyr::select(-donor)
+```
+
+### Mutiple regression - ferritin as outcome
 
 #### Correlograms
 
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
+
 ![](index_files/figure-markdown_github/unnamed-chunk-58-1.png)
 
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "pregnancy", "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
+
 ![](index_files/figure-markdown_github/unnamed-chunk-59-1.png)
+
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "coffee_n", "tea_n", "beer_n", "wine_n", "liquor_n"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
 
 ![](index_files/figure-markdown_github/unnamed-chunk-60-1.png)
 
 #### OLS
 
+``` r
+lm7_post_menop_std <- lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+```
+
 ##### Model diagnostics
 
-    ## Warning: Ignoring unknown parameters: shape
+``` r
+test_data_std %>%
+  rowid_to_column("ID") %>%
+  mutate(outlier = ifelse(ID == 48 | ID == 157 | ID == 430 | ID == 445 | ID == 448, TRUE, FALSE)) -> test_data_std
 
-![](index_files/figure-markdown_github/unnamed-chunk-62-1.png)![](index_files/figure-markdown_github/unnamed-chunk-62-2.png)
+autoplot(lm7_post_menop_std, data = test_data_std, which = c(1:6), ncol = 3, 
+          label.n = 5,
+         shape = 1, alpha = 0.7, colour = "outlier") + 
+  scale_color_manual(values = c( "black",  "red") )+
+  theme_bw() + theme(legend.position = "none") 
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-62-1.png)
+
+``` r
+post_menop_diag_plot <- autoplot(lm7_post_menop_std, data = test_data_std,
+                                 which = c(1:2,6), ncol = 1,  label.n = 5,
+         shape = 1, alpha = 0.7, colour = "outlier", label.alpha = 0, size = 0.5) + 
+  scale_color_manual(values = c( "dark grey",  "red") )+
+  theme_classic() + theme(legend.position = "none") 
+
+ggplot2::ggsave("../results/figures/supp_fig_3_post_menop.svg", post_menop_diag_plot, 
+                    height = 11.5 * 1.25, width = 11.5 * 1.25/3, units = "cm", dpi = 300)
+
+  
+post_menop_diag_plot
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-62-2.png)
 
 There are 4 observations that are seem to be problematic, so we also run robust regressions.
 
-#### Robust regression model amd p-values
+#### Robust regression model and p-values
+
+``` r
+# https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+
+# Run model 
+robust_mdl_post_menop_w <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+
+#Tidy output
+tidy_model_w_post <- tidy(robust_mdl_post_menop_w)
+
+# Compute p-values
+regressor_list <- tidy_model_w_post$term
+p_values <- rep(0,length(regressor_list ))
+for (i in c(1:length(regressor_list))){
+  p_values[[i]]<-f.robftest(robust_mdl_post_menop_w, var = regressor_list[[i]])[[7]]
+}
+
+mdl_post_menop_w <- tidy_model_w_post %>% 
+  full_join(data.frame(term = regressor_list, p_value = p_values),
+                      by="term") %>% 
+  mutate(significance = case_when(
+    p_value < 0.0001 ~ "p < 0.0001", 
+    p_value < 0.001 ~ "p < 0.001", 
+    p_value < 0.01 ~ "p < 0.01",
+    p_value < 0.05 ~ "p < 0.05",
+    TRUE ~"n.s."
+  )) %>% 
+  dplyr::select(-std.error, -statistic) 
+```
 
 #### Model outputs and interpretation
+
+``` r
+stargazer(robust_mdl_post_menop_w, lm7_post_menop_std, 
+          title = "Post-menopausal women",
+          intercept.bottom = FALSE,
+          type = "html",
+          single.row = TRUE,
+          omit = "Constant",
+          ci = FALSE,
+          header = FALSE,
+          dep.var.caption   = "Ferritin", 
+          dep.var.labels.include = FALSE,
+          model.names = FALSE,
+          model.numbers = FALSE,
+          column.labels = c("Robust", "OLS"),
+          covariate.labels =  c("Age", "BMI", "CRP", "Smoking(yes)",  "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          report=('vcp'))
+```
 
 <table style="text-align:center">
 <caption>
@@ -9920,3039 +5270,135 @@ Results from robust and OLS regressions differ slightly. In both models, ferriti
 
 #### Relative importance
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+``` r
+test_data_2_std<- test_data_std %>% 
+  mutate(smoking = ifelse(smoking == "no", 0,1),
+         pregnancy = ifelse(pregnancy == "no", 0,1)) 
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+lm7_num_std <- lm(log_ferr~ age + BMI + don_ct + don_ct_2+ log_last_don + smoking + iron + red_meat_n + wine_n + beer_n, test_data_2_std)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+plotdata <- booteval.relimp(bootresult, typesel = c("pmvd"), level = 0.95)
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
+plot_data_lm7_post_menop <- data_frame(regressor = names(plotdata@first),
+                        lmg = plotdata@pmvd,
+                        lmg_inf = plotdata@pmvd.lower[1,],
+                        lmg_sup = plotdata@pmvd.upper[1,]) 
+```
 
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-    ## Warning in rev(variances[[p]]) - variances[[p + 1]]: Recycling array of length 1 in vector-array arithmetic is deprecated.
-    ##   Use c() or as.vector() instead.
-
-### Regressions sTfR
+### Mutiple regression - sTfR as outcome
 
 #### Correlograms
+
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_sTfR", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
 
 ![](index_files/figure-markdown_github/unnamed-chunk-66-1.png)
 
 #### OLS
 
+``` r
+# we run the sTfR mdoels here to take advanatge of the pre-processing
+
+lm7_post_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+```
+
 ##### Model diagnostics
 
-    ## Warning: Ignoring unknown parameters: shape
+``` r
+test_data_std %>%
+  # rowid_to_column("ID") %>%
+  mutate(outlier = ifelse(ID == 249 | ID == 174 | ID == 200 | ID == 217 | ID == 208, TRUE, FALSE)) -> test_data_std
 
-![](index_files/figure-markdown_github/unnamed-chunk-68-1.png)![](index_files/figure-markdown_github/unnamed-chunk-68-2.png)
+autoplot(lm7_post_menop_sTfR, data = test_data_std, which = c(1:6), ncol = 3, 
+          label.n = 5,
+         shape = 1, alpha = 0.7, colour = "outlier") + 
+  scale_color_manual(values = c( "black",  "red") )+
+  theme_bw() + theme(legend.position = "none") 
+```
 
-#### Robust regression model amd p-values
+![](index_files/figure-markdown_github/unnamed-chunk-68-1.png)
+
+``` r
+post_menop_diag_plot <- autoplot(lm7_post_menop_sTfR, data = test_data_std, which = c(1:2,6), ncol = 1, 
+         shape = 1, alpha = 0.7, colour = "outlier", label.alpha = 0, size = 0.5) + 
+  scale_color_manual(values = c( "dark grey",  "red") )+
+  theme_classic() + theme(legend.position = "none") 
+
+ggplot2::ggsave("../results/figures/supp_fig_3_post_menop_sTfR.svg", post_menop_diag_plot, 
+                    height = 11.5 * 1.25, width = 11.5 * 1.25/3, units = "cm", dpi = 300)
+
+pre_menop_diag_plot
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-68-2.png)
+
+#### Robust regression model and p-values
+
+``` r
+# https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+
+# Run model 
+robust_mdl_sTfR_post_menop_w <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+
+#Tidy output
+tidy_mdl <- tidy(robust_mdl_sTfR_post_menop_w)
+
+# Compute p-values
+regressor_list <- tidy_mdl$term
+p_values <- rep(0,length(regressor_list ))
+for (i in c(1:length(regressor_list))){
+  p_values[[i]]<-f.robftest(robust_mdl_sTfR_post_menop_w, var = regressor_list[[i]])[[7]]
+}
+
+mdl_sTfR_post_menop_w <- tidy_mdl %>% 
+  full_join(data.frame(term = regressor_list, p_value=p_values),
+                      by="term") %>% 
+  mutate(significance = case_when(
+    p_value < 0.0001 ~ "p < 0.0001", 
+    p_value < 0.001 ~ "p < 0.001", 
+    p_value < 0.01 ~ "p < 0.01",
+    p_value < 0.05 ~ "p < 0.05",
+    TRUE ~"n.s."
+  )) %>% 
+  dplyr::select(-std.error, -statistic) 
+```
 
 #### Model outputs and interpretation
 
+``` r
+stargazer(robust_mdl_sTfR_post_menop_w, lm7_post_menop_sTfR, 
+          title = "Multiple linear regressions - Post-menopausal women",
+          intercept.bottom = FALSE,
+          type = "html",
+          single.row = TRUE,
+          omit = "Constant",
+          ci = FALSE,
+          header = FALSE,
+          dep.var.caption   = "sTfR", 
+          dep.var.labels.include = FALSE,
+          model.names = FALSE,
+          model.numbers = FALSE,
+          column.labels = c("Robust", "OLS"),
+          covariate.labels =  c("Age", "BMI", "CRP", "Smoking(yes)",  "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          report=('vcp'))
+```
+
 <table style="text-align:center">
 <caption>
-<strong>Pre-menopausal women</strong>
+<strong>Multiple linear regressions - Post-menopausal women</strong>
 </caption>
 <tr>
 <td colspan="3" style="border-bottom: 1px solid black">
@@ -13459,34 +5905,180 @@ we run this only on significant regressors ?
 
 Is very computationally intensive if we run on all 20 predictors... So we only run the predictors that were significant in at least one of the donor groups.
 
+``` r
+test_data_2_std<- test_data_std %>% 
+  mutate(smoking = ifelse(smoking == "no", 0,1)) 
+
+lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking  + red_meat_n + wine_n + beer_n + milk_n, test_data_2_std)
+
+bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
+
+plotdata <- booteval.relimp(bootresult, typesel = c("pmvd"), level = 0.95)
+
+plot_data_lm7_post_menop_sTfR <- data_frame(regressor = names(plotdata@first),
+                        lmg = plotdata@pmvd,
+                        lmg_inf = plotdata@pmvd.lower[1,],
+                        lmg_sup = plotdata@pmvd.upper[1,]) 
+```
+
 Men
 ---
 
 ### Data pre-processing
 
-### Regressions Ferritin
+``` r
+# Center and standardize variables
+
+test_data_std <- blood_data_summary_reg %>% 
+  filter(group == "Men") %>% 
+  dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, 
+                fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n) %>% 
+  gather(key = key, value = value, -donor) %>% 
+  group_by(key) %>% 
+  mutate(value = scale(value, scale = FALSE)[,1]) %>% 
+  spread(key = key, value = value)
+  
+test_data_std <- blood_data_summary_reg %>% 
+  filter(group == "Men") %>% 
+  dplyr::select(donor, log_ferr,log_sTfR, age, log_CRP, BMI, don_ct,log_last_don,smoking, iron) %>% 
+  mutate(age = age / 5, 
+         age = scale(age, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         don_ct = scale(don_ct, scale = FALSE)[,1],
+         log_last_don = scale(log_last_don, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         iron = scale(iron, scale = FALSE)[,1],
+         don_ct_2 = don_ct^2) %>% 
+  full_join(test_data_std, by = "donor")  %>% 
+  dplyr::select(-donor)
+```
+
+### Mutiple regression - ferritin as outcome
 
 #### Correlograms
 
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
+
 ![](index_files/figure-markdown_github/unnamed-chunk-73-1.png)
 
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
+
 ![](index_files/figure-markdown_github/unnamed-chunk-74-1.png)
+
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_ferr", "coffee_n", "tea_n", "beer_n", "wine_n", "liquor_n"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
 
 ![](index_files/figure-markdown_github/unnamed-chunk-75-1.png)
 
 #### OLS
 
+``` r
+lm7_men_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+```
+
 ##### Model diagnostics
 
-![](index_files/figure-markdown_github/unnamed-chunk-77-1.png)![](index_files/figure-markdown_github/unnamed-chunk-77-2.png)
+``` r
+test_data_std %>%
+  rowid_to_column("ID") %>%
+  mutate(outlier = ifelse(ID == 433 | ID == 449 | ID == 583 | ID == 4 | ID == 158 | ID == 319, TRUE, FALSE)) -> test_data_std
 
-#### Robust regression model amd p-values
+autoplot(lm7_men_std, data = test_data_std, which = c(1:6), ncol = 3,  label.n = 5,
+         shape = 1, alpha = 0.7, colour = "outlier") + 
+  scale_color_manual(values = c( "black",  "red") )+
+  theme_bw() + theme(legend.position = "none") 
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-77-1.png)
+
+``` r
+  men_diag_plot <- autoplot(lm7_men_std, data = test_data_std, which = c(1:2,6), ncol = 1, 
+         shape = 1, alpha = 0.7, colour = "outlier", label.alpha = 0, size = 0.3) + 
+  scale_color_manual(values = c( "dark grey",  "red") )+
+  theme_classic() + theme(legend.position = "none") 
+  
+  ggplot2::ggsave("../results/figures/supp_fig_3_men.svg", men_diag_plot, 
+                    height = 11.5 * 1.25, width = 11.5 * 1.25/3, units = "cm", dpi = 300)
+
+men_diag_plot
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-77-2.png)
+
+#### Robust regression model and p-values
+
+``` r
+# https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
+
+# Run model 
+robust_mdl_men <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+
+#Tidy output
+tidy_model_men <- tidy(robust_mdl_men)
+
+# Compute p-values
+regressor_list <- tidy_model_men$term
+p_values <- rep(0,length(regressor_list ))
+for (i in c(1:length(regressor_list))){
+  p_values[[i]]<-f.robftest(robust_mdl_men, var = regressor_list[[i]])[[7]]
+}
+
+mdl_men <- tidy_model_men %>% 
+  full_join(data.frame(term = regressor_list, p_value=p_values),
+                      by="term") %>% 
+  mutate(significance = case_when(
+    p_value < 0.0001 ~ "p < 0.0001", 
+    p_value < 0.001 ~ "p < 0.001", 
+    p_value < 0.01 ~ "p < 0.01",
+    p_value < 0.05 ~ "p < 0.05",
+    TRUE ~"n.s."
+  )) 
+```
 
 #### Model outputs and interpretation
 
+``` r
+stargazer(robust_mdl_men, lm7_men_std,
+          title = "Multiple linear regressions - Men",
+          intercept.bottom = FALSE,
+          type = "html",
+          single.row = TRUE,
+          omit = "Constant",
+          ci = FALSE,
+          header = FALSE,
+          dep.var.caption   = "Ferritin", 
+          dep.var.labels.include = FALSE,
+          model.names = FALSE,
+          model.numbers = FALSE,
+          column.labels = c("Robust", "OLS"),
+          covariate.labels =  c("Age", "BMI", "CRP", "Smoking(yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          report=('vcp'))
+```
+
 <table style="text-align:center">
 <caption>
-<strong>Men</strong>
+<strong>Multiple linear regressions - Men</strong>
 </caption>
 <tr>
 <td colspan="3" style="border-bottom: 1px solid black">
@@ -13966,7 +6558,7 @@ F Statistic
 </td>
 </tr>
 </table>
-Results from robust and OLS rergessions are similar. In both models, ferritin levels are positively correlated with age, BMI, nb of days since last donation, red meat consumption as well as Beer and wine consumption (would not survive multiple comparison correction). and wine consumption (which would not survive multiple correction). Ferritin levels are negatively correlated with the number ofdonations and iron supplementation. A significant neg corelation with nb of donations squared indicates that the effect of nb of donations is larger for small numbers of donations than for large number of donations.
+Results from robust and OLS rergessions are similar. In both models, ferritin levels are positively correlated with age, BMI, nb of days since last donation, red meat consumption as well as Beer and wine consumption (would not survive multiple comparison correction). and wine consumption (which would not survive multiple correction). Ferritin levels are negatively correlated with the number of donations and iron supplementation. A significant negative corelation with the nb of donations squared indicates that the effect of nb of donations is larger for small numbers of donations than for large number of donations.
 
 -   An increase in 5 years of age is associated with a 2.3 % increase in Ferritin levels.
 
@@ -13974,33 +6566,139 @@ Results from robust and OLS rergessions are similar. In both models, ferritin le
 
 -   An increase of meat consumption of one on our grading scale is associated with a 10.3 % increase in Ferritin levels.
 
--   An increase of iron supplementation of one on our grading scale is associated with a -4.4 % decrease in Ferritin levels.
+-   An increase of iron supplementation of one on our grading scale is associated with a 4.4 % decrease in Ferritin levels.
 
--   An additional donation in the previous 2 years is associated with a -8.5 % decrease in Ferritin levels.
+-   An additional donation in the previous 2 years is associated with a 8.5 % decrease in Ferritin levels.
 
 #### Relative importance
 
-### Regressions sTfR
+``` r
+test_data_2_std<- test_data_std %>% 
+  mutate(smoking = ifelse(smoking == "no", 0,1)) 
+
+lm7_num_std <- lm(log_ferr~ age + BMI + don_ct + don_ct_2+ log_last_don + smoking + iron + red_meat_n + wine_n + beer_n, test_data_2_std)
+
+bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
+
+plotdata <- booteval.relimp(bootresult, typesel = c("pmvd"), level = 0.95)
+
+plot_data_lm7_men <- data_frame(regressor = names(plotdata@first),
+                        lmg = plotdata@pmvd,
+                        lmg_inf = plotdata@pmvd.lower[1,],
+                        lmg_sup = plotdata@pmvd.upper[1,]) 
+```
+
+### Mutiple regression - sTfR as outcome
 
 #### Correlograms
+
+``` r
+ggpairs(test_data_std, 
+        columns = c("log_sTfR", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
 
 ![](index_files/figure-markdown_github/unnamed-chunk-81-1.png)
 
 #### OLS
 
+``` r
+# we run the sTfR mdoels here to take advanatge of the pre-processing
+
+lm7_men_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+```
+
 ##### Model diagnostics
 
-    ## Warning: Ignoring unknown parameters: shape
+``` r
+test_data_std %>%
+   # rowid_to_column("ID") %>%
+  mutate(outlier = ifelse(ID == 465 | ID == 91 | ID == 692 | ID == 342 | ID == 55 | ID == 339, TRUE, FALSE)) -> test_data_std
 
-![](index_files/figure-markdown_github/unnamed-chunk-83-1.png)![](index_files/figure-markdown_github/unnamed-chunk-83-2.png)
+autoplot(lm7_men_sTfR, data = test_data_std, 
+         which = c(1:6), 
+         ncol = 3, 
+         label.n = 5,
+         shape = 1, alpha = 0.7, colour = "outlier") + 
+  scale_color_manual(values = c( "black",  "red") )+
+  theme_bw() + theme(legend.position = "none") 
+```
 
-#### Robust regression model amd p-values
+![](index_files/figure-markdown_github/unnamed-chunk-83-1.png)
+
+``` r
+post_menop_diag_plot <- autoplot(lm7_men_sTfR, data = test_data_std, which = c(1:2,6), ncol = 1, 
+         shape = 1, alpha = 0.7, colour = "outlier", label.alpha = 0, size = 0.5) + 
+  scale_color_manual(values = c( "dark grey",  "red") )+
+  theme_classic() + theme(legend.position = "none") 
+
+ggplot2::ggsave("../results/figures/supp_fig_3_men_sTfR.svg", post_menop_diag_plot, 
+                    height = 11.5 * 1.25, width = 11.5 * 1.25/3, units = "cm", dpi = 300)
+
+  
+pre_menop_diag_plot
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-83-2.png)
+
+#### Robust regression model and p-values
+
+``` r
+# Run model 
+robust_mdl_sTfR_men <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking   + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+
+#Tidy output
+tidy_mdl <- tidy(robust_mdl_sTfR_men)
+
+# Compute p-values
+regressor_list <- tidy_mdl$term
+p_values <- rep(0,length(regressor_list ))
+for (i in c(1:length(regressor_list))){
+  p_values[[i]]<-f.robftest(robust_mdl_sTfR_men, var = regressor_list[[i]])[[7]]
+}
+
+mdl_sTfR_men <- tidy_mdl %>% 
+  full_join(data.frame(term = regressor_list, p_value=p_values),
+                      by="term") %>% 
+  mutate(significance = case_when(
+    p_value < 0.0001 ~ "p < 0.0001", 
+    p_value < 0.001 ~ "p < 0.001", 
+    p_value < 0.01 ~ "p < 0.01",
+    p_value < 0.05 ~ "p < 0.05",
+    TRUE ~"n.s."
+  )) %>% 
+  dplyr::select(-std.error, -statistic) 
+```
 
 #### Model outputs and interpretation
 
+``` r
+stargazer(robust_mdl_sTfR_men, lm7_men_sTfR, 
+          title = "Multiple regression - Men",
+          intercept.bottom = FALSE,
+          type = "html",
+          single.row = TRUE,
+          omit = "Constant",
+          ci = FALSE,
+          header = FALSE,
+          dep.var.caption   = "sTfR", 
+          dep.var.labels.include = FALSE,
+          model.names = FALSE,
+          model.numbers = FALSE,
+          column.labels = c("Robust", "OLS"),
+          covariate.labels =  c("Age", "BMI", "CRP", "Smoking(yes)",  
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          report=('vcp'))
+```
+
 <table style="text-align:center">
 <caption>
-<strong>Men</strong>
+<strong>Multiple regression - Men</strong>
 </caption>
 <tr>
 <td colspan="3" style="border-bottom: 1px solid black">
@@ -14482,6 +7180,22 @@ F Statistic
 </table>
 #### Relative importance
 
+``` r
+test_data_2_std<- test_data_std %>% 
+  mutate(smoking = ifelse(smoking == "no", 0,1)) 
+
+lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking  + red_meat_n + wine_n + beer_n + milk_n, test_data_2_std)
+
+bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
+
+plotdata <- booteval.relimp(bootresult, typesel = c("pmvd"), level = 0.95)
+
+plot_data_lm7_men_sTfR <- data_frame(regressor = names(plotdata@first),
+                        lmg = plotdata@pmvd,
+                        lmg_inf = plotdata@pmvd.lower[1,],
+                        lmg_sup = plotdata@pmvd.upper[1,]) 
+```
+
 Regression Coefficient bootstrapped CIs
 ---------------------------------------
 
@@ -14489,13 +7203,834 @@ We compute bootstrapped distributions for regression coefficients for OLS and ro
 
 ### OLS regression - coefficients
 
-![](index_files/figure-markdown_github/unnamed-chunk-91-1.png)
+``` r
+# Create tidy versions of OLS regression models
+
+lm7_pre_menop_df_std <- tidy(lm7_pre_menop_std) %>% 
+  mutate(beta_sign = sign(estimate),
+         coefficient = estimate,
+   group  = "Pre_menopause_women",
+   is_sig = ifelse(p.value < .05, TRUE, FALSE)) %>% 
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm7_post_menop_df_std <- tidy(lm7_post_menop_std) %>% 
+  mutate(beta_sign = sign(estimate),
+   group  = "Post_menopause_women", 
+            coefficient = estimate,
+   is_sig = ifelse(p.value < .05, TRUE, FALSE)) %>%  
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm7_men_df_std <- tidy(lm7_men_std) %>% 
+  mutate(beta_sign = sign(estimate),
+   group  = "Men",
+    coefficient = estimate,
+   is_sig = ifelse(p.value < .05, TRUE, FALSE)) %>%  
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm_signs_std <- bind_rows(lm7_pre_menop_df_std,lm7_post_menop_df_std,lm7_men_df_std) %>% 
+  rename(regressor = term) %>% 
+  filter(regressor != "(Intercept)") 
+
+lm7_pre_menop_df_sTfR <- tidy(lm7_pre_menop_sTfR) %>% 
+  mutate(beta_sign = sign(estimate),
+         coefficient = estimate,
+   group  = "Pre_menopause_women",
+   is_sig = ifelse(p.value < .05, TRUE, FALSE)) %>% 
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm7_post_menop_df_sTfR <- tidy(lm7_post_menop_sTfR) %>% 
+  mutate(beta_sign = sign(estimate),
+   group  = "Post_menopause_women", 
+            coefficient = estimate,
+   is_sig = ifelse(p.value < .05, TRUE, FALSE)) %>%  
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm7_men_df_sTfR <- tidy(lm7_men_sTfR) %>% 
+  mutate(beta_sign = sign(estimate),
+   group  = "Men",
+    coefficient = estimate,
+   is_sig = ifelse(p.value < .05, TRUE, FALSE)) %>%  
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm_signs_sTfR <- bind_rows(lm7_pre_menop_df_sTfR, lm7_post_menop_df_sTfR, lm7_men_df_sTfR) %>% 
+  rename(regressor = term) %>% 
+  filter(regressor != "(Intercept)") 
+```
+
+``` r
+# https://www.painblogr.org/2017-10-18-purrring-through-bootstraps.html
+
+
+get_coefficients <- function(data, boot_ind){
+  fit <- lm (log_ferr~.,data[boot_ind,])
+  return(coef(fit))
+}
+
+get_coefficients_sTfR <- function(data, boot_ind){
+  fit <- lm (log_sTfR~.,data[boot_ind,])
+  return(coef(fit))
+}
+
+compute_Bca_CI <-function(fit_boot){
+  Bca_inf = rep(0, length(fit_boot$t0))
+  Bca_sup = rep(0, length(fit_boot$t0))
+  for (i_regressor in 1:length(fit_boot$t0)){
+    CI <- boot.ci(fit_boot, type = "bca", index=i_regressor)
+    Bca_inf[i_regressor] <- CI$bca[4]
+    Bca_sup[i_regressor] <- CI$bca[5]
+  }
+  return(tibble(Bca_inf,Bca_sup, regressor = names(fit_boot$t0)) %>% 
+           filter(regressor != "(Intercept)"))
+}
+
+
+get_bootstrap <- function(data, nb_boot, outcome){
+ 
+  if (outcome == "Ferritin"){
+    data <- data %>% dplyr::select(-log_sTfR)
+    
+    fit_boot <- boot(data, strata = data$smoking, statistic= get_coefficients, R = nb_boot)
+  }else{
+    data <- data %>% dplyr::select(-log_ferr)
+    
+    fit_boot <- boot(data, strata = data$smoking, statistic= get_coefficients_sTfR, R = nb_boot)
+  }
+
+  fit_boot_distrib <- as.tibble(fit_boot$t)  
+  names(fit_boot_distrib) <- names(fit_boot$t0)
+
+  fit_boot_Bca <- compute_Bca_CI(fit_boot)
+  
+  return(list(fit_boot_distrib,fit_boot_Bca))
+}
+
+
+
+
+get_bootstrap_coeffs <- function(blood_data_summary_reg, current_group, outcome, nb_boot )
+{
+
+  ## preprocess and standardize data
+  test_data_std <- blood_data_summary_reg %>% 
+    filter(group == current_group) %>% 
+    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n ) %>% 
+    gather(key = key, value = value, -donor) %>% 
+    group_by(key) %>% 
+    mutate(value = scale(value, scale = FALSE)[,1]) %>% 
+    spread(key = key, value = value)
+  
+  test_data_std <- blood_data_summary_reg %>% 
+    filter(group == current_group) %>% 
+    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct,log_last_don,smoking, pregnancy, iron) %>% 
+  mutate(age = age / 5, 
+         age = scale(age, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         don_ct = scale(don_ct, scale = FALSE)[,1],
+         log_last_don = scale(log_last_don, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         iron = scale(iron, scale = FALSE)[,1],
+         don_ct_2 = don_ct^2) %>% 
+    full_join(test_data_std, by = "donor")   %>% 
+    dplyr::select(-donor) 
+  
+  if(current_group == "Men"){
+    test_data_std <-  dplyr::select(test_data_std, -pregnancy)
+  }
+
+  
+  result <- test_data_std %>% 
+  get_bootstrap(nb_boot = nb_boot, outcome = outcome)
+
+
+  bootstrap_distrib <- result[[1]] %>% 
+    gather(key = regressor, value = coefficient) %>% 
+    filter(regressor != "(Intercept)") %>% 
+    mutate(group = current_group)
+    
+  Bca_CI  <- result[[2]] %>% mutate(group = current_group)
+
+  return(list(bootstrap_distrib,Bca_CI))
+}
+
+set.seed(125)
+output_file_distrib = ("../results/bootstraps/coeff_boot_distrib_seed_125_ctr_strata_final.rdata")
+output_file_Bca = ("../results/bootstraps/coeff_boot_Bca_seed_125_ctr_strata_final.rdata")
+# 
+output_file_distrib_sTfR = ("../results/bootstraps/coeff_boot_distrib_seed_125_ctr_sTfR_final.rdata")
+output_file_Bca_sTfR = ("../results/bootstraps/coeff_boot_Bca_seed_125_ctr_sTfR_final.rdata")
+
+
+get_from_file_ferr = TRUE
+
+if (get_from_file_ferr){
+  load(file=output_file_distrib)
+  load(file=output_file_Bca)
+}else
+{
+   for(group_str in c("Pre_menopause_women", "Post_menopause_women","Men")){
+    
+    stuff <- get_bootstrap_coeffs(blood_data_summary_reg, group_str, outcome = "Ferritin", nb_boot = 10000)
+    
+    if(!exists("bootstrap_distrib")){
+      bootstrap_distrib <- stuff[[1]]
+      bootstrap_Bca_CI <- stuff[[2]]
+    }else
+    {
+      bootstrap_distrib<-bind_rows(bootstrap_distrib, stuff[[1]])
+      bootstrap_Bca_CI<-bind_rows(bootstrap_Bca_CI, stuff[[2]])
+    }
+  } 
+  save(bootstrap_distrib,file=output_file_distrib) 
+  save(bootstrap_Bca_CI,file=output_file_Bca)
+}
+
+
+get_from_file_sTfR = TRUE
+
+if (get_from_file_sTfR){
+  load(file = output_file_distrib_sTfR)
+  load(file = output_file_Bca_sTfR)
+}else
+{
+   for(group_str in c("Pre_menopause_women", "Post_menopause_women","Men")){
+    
+    stuff <- get_bootstrap_coeffs(blood_data_summary_reg, group_str, outcome = "sTfR", nb_boot = 10000)
+    
+    if(!exists("bootstrap_distrib_sTfR")){
+      bootstrap_distrib_sTfR <- stuff[[1]]
+      bootstrap_Bca_CI_sTfR <- stuff[[2]]
+    }else
+    {
+      bootstrap_distrib_sTfR <- bind_rows(bootstrap_distrib_sTfR, stuff[[1]])
+      bootstrap_Bca_CI_sTfR <- bind_rows(bootstrap_Bca_CI_sTfR, stuff[[2]])
+    }
+  } 
+  save(bootstrap_distrib_sTfR,file=output_file_distrib_sTfR) 
+  save(bootstrap_Bca_CI_sTfR,file=output_file_Bca_sTfR)
+}
+```
+
+``` r
+# Here we create lists with 95%CI values to include in the final regression model tables.
+
+regressor_values <- c(
+ "don_ct" = "Nb donations (2 years)",
+   "don_ct_2" = "(Nb donations (2 years))²",
+   "log_last_don" = "Days since last donation",
+   "iron" = "Iron supplementation",
+   "log_CRP" ="CRP (log)",
+   "smoking" ="Smoking",
+   "age" ="Age",
+    "pregnancy" = "Pregnancy",
+    "beer_n" = "Beer",
+    "red_meat_n" = "Red meat",
+    "vegetables_n" = "Vegetables",
+    "fruit_berries_n" = "Fruit and Berries",
+    "fruit_juices_n" =  "Fruit Juices",
+    "milk_n" = "Milk",
+    "coffee_n" = "Coffee",
+    "tea_n" = "Tea",
+    "wine_n" = "Wine", 
+    "liquor_n" = "Liquor"
+)
+
+## create list for stargazer table
+
+CI_regression_Ferr = list(3)
+v_group = c( "Pre_menopause_women", "Post_menopause_women", "Men")
+
+for(i_group in c(1:length(v_group)) ){
+  
+  CI_matrix <- as.matrix(filter(bootstrap_Bca_CI, group == v_group[i_group]) %>%
+                           dplyr::select(Bca_inf, Bca_sup))
+
+  dimnames(CI_matrix) = list(filter(bootstrap_Bca_CI, group == v_group[i_group])$regressor,
+    dimnames(CI_matrix)[[2]]) 
+  
+  CI_regression_Ferr[[i_group]] = CI_matrix
+}
+
+
+
+bootstrap_Bca_CI <- bootstrap_Bca_CI %>% 
+  full_join(lm_signs_std, by=c("regressor", "group")) %>% 
+  mutate(regressor = ifelse(regressor == "smokingyes", "smoking", as.character(regressor))) %>% 
+  mutate(regressor = ifelse(regressor == "smoking.L", "smoking",as.character(regressor))) %>% 
+  mutate(regressor = ifelse(regressor == "pregnancy.L", "pregnancy",as.character(regressor))) %>% 
+  mutate(regressor = ifelse(regressor == "pregnancyyes", "pregnancy",as.character(regressor))) %>% 
+  mutate(regressor = plyr::revalue(regressor, regressor_values), 
+        regressor = ordered(regressor,
+                  levels =  c("Age", "BMI", "CRP (log)","Smoking",  "Pregnancy", "Nb donations (2 years)", 
+                              "(Nb donations (2 years))²",  "Days since last donation", "Iron supplementation",
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                               "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+        regressor = fct_rev(regressor),
+        group = case_when(
+          group == "Pre_menopause_women" ~ "Pre-menopausal women",
+          group == "Post_menopause_women" ~ "Post-menopausal women",
+          TRUE ~ "Men"),
+        group = ordered(group, levels = c( "Pre-menopausal women", "Post-menopausal women", "Men")))
+```
+
+``` r
+## create list for stargazer table
+
+CI_regression_sTfR = list(3)
+v_group = c( "Pre_menopause_women", "Post_menopause_women", "Men")
+
+for(i_group in c(1:length(v_group)) ){
+  
+  CI_matrix <- as.matrix(filter(bootstrap_Bca_CI_sTfR, group == v_group[i_group]) %>%
+                           dplyr::select(Bca_inf, Bca_sup))
+
+  dimnames(CI_matrix) = list(filter(bootstrap_Bca_CI_sTfR, group == v_group[i_group])$regressor,
+    dimnames(CI_matrix)[[2]]) 
+  
+  CI_regression_sTfR[[i_group]] = CI_matrix
+}
+
+
+
+bootstrap_Bca_CI_sTfR <- bootstrap_Bca_CI_sTfR %>% 
+  full_join(lm_signs_sTfR, by=c("regressor", "group")) %>% 
+  mutate(regressor = ifelse(regressor == "smokingyes", "smoking", as.character(regressor))) %>% 
+  mutate(regressor = ifelse(regressor == "smoking.L", "smoking",as.character(regressor))) %>% 
+  mutate(regressor = ifelse(regressor == "pregnancy.L", "pregnancy",as.character(regressor))) %>% 
+  mutate(regressor = ifelse(regressor == "pregnancyyes", "pregnancy",as.character(regressor))) %>% 
+  mutate(regressor = plyr::revalue(regressor, regressor_values), 
+        regressor = ordered(regressor,
+                  levels =  c("Age", "BMI", "CRP (log)","Smoking",  "Pregnancy", "Nb donations (2 years)", 
+                              "(Nb donations (2 years))²",  "Days since last donation", "Iron supplementation",
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                               "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+        regressor = fct_rev(regressor),
+        group = case_when(
+          group == "Pre_menopause_women" ~ "Pre-menopausal women",
+          group == "Post_menopause_women" ~ "Post-menopausal women",
+          TRUE ~ "Men"),
+        group = ordered(group, levels = c( "Pre-menopausal women", "Post-menopausal women", "Men")))
+```
 
 ### Robust regression - coeffs
 
+``` r
+lm7_pre_menop_df_rob <- mdl_pre_menop_w %>% 
+  mutate(beta_sign = sign(estimate),
+         coefficient = estimate,
+   group  = "Pre_menopause_women",
+   is_sig = ifelse(p_value < .05, TRUE, FALSE)) %>% 
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm7_post_menop_df_rob <- mdl_post_menop_w %>% 
+  mutate(beta_sign = sign(estimate),
+   group  = "Post_menopause_women", 
+            coefficient = estimate,
+   is_sig = ifelse(p_value < .05, TRUE, FALSE)) %>%  
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm7_men_df_rob <- mdl_men %>% 
+  mutate(beta_sign = sign(estimate),
+   group  = "Men",
+    coefficient = estimate,
+   is_sig = ifelse(p_value < .05, TRUE, FALSE)) %>%  
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm_signs_rob <- bind_rows(lm7_pre_menop_df_rob,lm7_post_menop_df_rob,lm7_men_df_rob) %>% 
+  rename(regressor = term) 
+
+lm7_pre_menop_sTfR_rob <- mdl_sTfR_pre_menop_w %>% 
+  mutate(beta_sign = sign(estimate),
+         coefficient = estimate,
+   group  = "Pre_menopause_women",
+   is_sig = ifelse(p_value < .05, TRUE, FALSE)) %>% 
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm7_post_menop_sTfR_rob <- mdl_sTfR_post_menop_w %>% 
+  mutate(beta_sign = sign(estimate),
+   group  = "Post_menopause_women", 
+            coefficient = estimate,
+   is_sig = ifelse(p_value < .05, TRUE, FALSE)) %>%  
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm7_men_sTfR_rob <- mdl_men %>% 
+  mutate(beta_sign = sign(estimate),
+   group  = "Men",
+    coefficient = estimate,
+   is_sig = ifelse(p_value < .05, TRUE, FALSE)) %>%  
+  dplyr::select(term, beta_sign, group,is_sig,coefficient)
+
+lm_signs_sTfR_rob <- bind_rows(lm7_pre_menop_sTfR_rob,
+                               lm7_post_menop_sTfR_rob,
+                               lm7_men_sTfR_rob) %>% 
+  rename(regressor = term) 
+```
+
+``` r
+get_coefficients <- function(data, boot_ind){
+  
+  model <- tidy(rlm(log_ferr ~ ., data[boot_ind,], maxit = 40)) 
+  # %>% filter(term != "(Intercept)")
+  return(model$estimate)
+}
+
+get_coefficients_sTfR <- function(data, boot_ind){
+  
+  model <- tidy(rlm(log_sTfR ~ ., data[boot_ind,], maxit = 40)) 
+  # %>% filter(term != "(Intercept)")
+  return(model$estimate)
+}
+
+compute_Bca_CI <-function(fit_boot){
+  Bca_inf = rep(0, length(fit_boot$t0))
+  Bca_sup = rep(0, length(fit_boot$t0))
+  for (i_regressor in 1:length(fit_boot$t0)){
+    CI <- boot.ci(fit_boot, type = "bca", index=i_regressor)
+    Bca_inf[i_regressor] <- CI$bca[4]
+    Bca_sup[i_regressor] <- CI$bca[5]
+  }
+  
+  return(tibble(Bca_inf,Bca_sup)) 
+}
+
+
+get_bootstrap <- function(data, outcome, nb_boot){
+  
+  if (outcome == "Ferritin"){
+      data <- data %>% dplyr::select(-log_sTfR)
+      fit_boot <- boot(data, strata = data$smoking, statistic = get_coefficients, R = nb_boot)
+  
+      fit_boot_distrib <- as.tibble(fit_boot$t)  
+      names(fit_boot_distrib) <- tidy(rlm(log_ferr ~ ., data, maxit = 40))$term
+  }else{
+      data <- data %>% dplyr::select(-log_ferr)
+      fit_boot <- boot(data, strata = data$smoking, statistic = get_coefficients_sTfR, R = nb_boot)
+  
+      fit_boot_distrib <- as.tibble(fit_boot$t)  
+      names(fit_boot_distrib) <- tidy(rlm(log_sTfR ~ ., data, maxit = 40))$term
+  }
+
+  fit_boot_Bca <- compute_Bca_CI(fit_boot)
+  fit_boot_Bca$regressor <- names(fit_boot_distrib)
+  
+  return(list(fit_boot_distrib,fit_boot_Bca))
+}
+
+
+
+
+get_bootstrap_coeffs <- function(blood_data_summary_reg, current_group, outcome, nb_boot )
+{
+  ## preprocess and standardize data
+  test_data_std <- blood_data_summary_reg %>% 
+    filter(group == current_group) %>% 
+    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n ) %>% 
+    gather(key = key, value = value, -donor) %>% 
+    group_by(key) %>% 
+    mutate(value = scale(value, scale = FALSE)[,1]) %>% 
+    spread(key = key, value = value)
+  
+  test_data_std <- blood_data_summary_reg %>% 
+    filter(group == current_group) %>% 
+    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct,log_last_don,smoking, pregnancy, iron) %>% 
+  mutate(age = age / 5, 
+         age = scale(age, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         don_ct = scale(don_ct, scale = FALSE)[,1],
+         log_last_don = scale(log_last_don, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         iron = scale(iron, scale = FALSE)[,1],
+         don_ct_2 = don_ct^2) %>% 
+    full_join(test_data_std, by = "donor")   %>% 
+    dplyr::select(-donor) 
+  
+  if(current_group == "Men"){
+    test_data_std <-  dplyr::select(test_data_std, -pregnancy)
+  }
+
+  result <- test_data_std %>% 
+  get_bootstrap(outcome =  outcome, nb_boot = nb_boot)
+
+  bootstrap_distrib <- result[[1]] %>% 
+    gather(key = regressor, value = coefficient) %>% 
+    mutate(group = current_group)
+    
+  Bca_CI  <- result[[2]] %>% mutate(group = current_group)
+
+  return(list(bootstrap_distrib,Bca_CI))
+}
+
+set.seed(125)
+
+output_file_distrib = ("../results/bootstraps/coeff_robust_boot_distrib_seed_125_std_strata_final.rdata")
+output_file_Bca = ("../results/bootstraps/coeff_robust_boot_Bca_seed_125_std_strata_final.rdata")
+
+output_file_distrib_sTfR = ("../results/bootstraps/coeff_robust_boot_distrib_seed_125_sTfR_final.rdata")
+output_file_Bca_sTfR = ("../results/bootstraps/coeff_robust_boot_Bca_seed_125_sTfR_final.rdata")
+
+get_from_file_Ferr = TRUE
+
+if (get_from_file_Ferr){
+  load(file=output_file_distrib)
+  load(file=output_file_Bca)
+}else
+{
+   for(group_str in c("Pre_menopause_women", "Post_menopause_women","Men")){
+    
+    stuff <- get_bootstrap_coeffs(blood_data_summary_reg, group_str, outcome =  "Ferritin",  nb_boot = 10000)
+    
+    if(!exists("bootstrap_distrib_robust")){
+      bootstrap_distrib_robust <- stuff[[1]]
+      bootstrap_Bca_CI_robust <- stuff[[2]]
+    }else
+    {
+      bootstrap_distrib_robust<-bind_rows(bootstrap_distrib_robust, stuff[[1]])
+      bootstrap_Bca_CI_robust<-bind_rows(bootstrap_Bca_CI_robust, stuff[[2]])
+    }
+  } 
+  save(bootstrap_distrib_robust,file=output_file_distrib) 
+  save(bootstrap_Bca_CI_robust,file=output_file_Bca)
+}
+
+get_from_file_sTfR = TRUE
+
+if (get_from_file_sTfR){
+  load(file=output_file_distrib_sTfR)
+  load(file=output_file_Bca_sTfR)
+}else
+{
+   for(group_str in c("Pre_menopause_women", "Post_menopause_women","Men")){
+    
+    stuff <- get_bootstrap_coeffs(blood_data_summary_reg, group_str, outcome =  "sTfR",  nb_boot = 10000)
+    
+    if(!exists("bootstrap_distrib_robust_sTfR")){
+      bootstrap_distrib_robust_sTfR <- stuff[[1]]
+      bootstrap_Bca_CI_robust_sTfR <- stuff[[2]]
+    }else
+    {
+      bootstrap_distrib_robust_sTfR<-bind_rows(bootstrap_distrib_robust_sTfR, stuff[[1]])
+      bootstrap_Bca_CI_robust_sTfR<-bind_rows(bootstrap_Bca_CI_robust_sTfR, stuff[[2]])
+    }
+  } 
+  save(bootstrap_distrib_robust_sTfR,file=output_file_distrib_sTfR) 
+  save(bootstrap_Bca_CI_robust_sTfR,file=output_file_Bca_sTfR)
+}
+```
+
+``` r
+## Creqate list to include these CIs to the regression results
+
+CI_regression_robust = list(3)
+v_group = c( "Pre_menopause_women", "Post_menopause_women", "Men")
+
+
+# Change the name of smoking and prenancy to match that of robust regression object for 
+# proper table output by stargazer later
+
+temp_boot_CI <- 
+  bootstrap_Bca_CI_robust %>% 
+    mutate(regressor = ifelse(regressor == "smoking", "smoking.L",regressor)) %>%
+    mutate(regressor = ifelse(regressor == "pregnancy", "pregnancy.L",regressor)) 
+
+for(i_group in c(1:length(v_group)) ){
+  
+  CI_matrix <- as.matrix(filter(temp_boot_CI, group == v_group[i_group]) %>% 
+                           dplyr::select(Bca_inf, Bca_sup))
+
+  dimnames(CI_matrix) = list(filter(temp_boot_CI, group == v_group[i_group])$regressor,
+    dimnames(CI_matrix)[[2]]) 
+  
+  CI_regression_robust[[i_group]] = CI_matrix
+}
+
+bootstrap_Bca_CI_robust <- bootstrap_Bca_CI_robust %>% 
+  mutate(regressor = ifelse(regressor == "smoking", "smoking.L",regressor)) %>%
+  mutate(regressor = ifelse(regressor == "pregnancy", "pregnancy.L",regressor)) %>%
+  full_join(lm_signs_rob, by=c("regressor", "group")) %>% 
+  mutate(regressor = ifelse(regressor == "smoking.L", "smoking",regressor)) %>%
+  mutate(regressor = ifelse(regressor == "pregnancy.L", "pregnancy",regressor)) %>%
+  mutate(regressor = plyr::revalue(regressor, regressor_values), 
+        regressor = ordered(regressor,
+                  levels =  c("Age", "BMI", "CRP (log)","Smoking",  "Pregnancy", "Nb donations (2 years)", 
+                              "(Nb donations (2 years))²",  "Days since last donation", "Iron supplementation",
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                               "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+        regressor = fct_rev(regressor),
+        group = case_when(
+          group == "Pre_menopause_women" ~ "Pre-menopausal women",
+          group == "Post_menopause_women" ~ "Post-menopausal women",
+          TRUE ~ "Men"),
+        group = ordered(group, levels = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )))
+```
+
+``` r
+## Create list to include these CIs to the regression results
+
+CI_regression_robust_sTfR = list(3)
+v_group = c( "Pre_menopause_women", "Post_menopause_women", "Men")
+
+
+# Change the name of smoking and prenancy to match that of robust regression object for 
+# proper table output by stargazer later
+temp_boot_CI_sTfR <- 
+  bootstrap_Bca_CI_robust_sTfR %>% 
+    mutate(regressor = ifelse(regressor == "smoking", "smoking.L",regressor)) %>%
+    mutate(regressor = ifelse(regressor == "pregnancy", "pregnancy.L",regressor)) 
+
+for(i_group in c(1:length(v_group)) ){
+  
+  CI_matrix <- as.matrix(filter(temp_boot_CI_sTfR, group == v_group[i_group]) %>% 
+                           dplyr::select(Bca_inf, Bca_sup))
+
+  dimnames(CI_matrix) = list(filter(temp_boot_CI_sTfR, group == v_group[i_group])$regressor,
+    dimnames(CI_matrix)[[2]]) 
+  
+  CI_regression_robust_sTfR[[i_group]] = CI_matrix
+}
+
+bootstrap_Bca_CI_robust_sTfR <- bootstrap_Bca_CI_robust_sTfR %>% 
+  mutate(regressor = ifelse(regressor == "smoking", "smoking.L",regressor)) %>%
+  mutate(regressor = ifelse(regressor == "pregnancy", "pregnancy.L",regressor)) %>%
+  full_join(lm_signs_rob, by=c("regressor", "group")) %>% 
+  mutate(regressor = ifelse(regressor == "smoking.L", "smoking",regressor)) %>%
+  mutate(regressor = ifelse(regressor == "pregnancy.L", "pregnancy",regressor)) %>%
+  mutate(regressor = plyr::revalue(regressor, regressor_values), 
+        regressor = ordered(regressor,
+                  levels =  c("Age", "BMI", "CRP (log)","Smoking",  "Pregnancy", "Nb donations (2 years)", 
+                              "(Nb donations (2 years))²",  "Days since last donation", "Iron supplementation",
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                               "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+        regressor = fct_rev(regressor),
+        group = case_when(
+          group == "Pre_menopause_women" ~ "Pre-menopausal women",
+          group == "Post_menopause_women" ~ "Post-menopausal women",
+          TRUE ~ "Men"),
+        group = ordered(group, levels = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )))
+```
+
 ### Robust regression - betas
 
-![](index_files/figure-markdown_github/test3-1.png)
+``` r
+get_coefficients <- function(data, boot_ind){
+  
+  model <- tidy(rlm(log_ferr ~ ., data[boot_ind,], maxit = 40)) %>% filter(term != "(Intercept)")
+  return(model$estimate)
+}
+
+get_coefficients_sTfR <- function(data, boot_ind){
+  
+  model <- tidy(rlm(log_sTfR ~ ., data[boot_ind,], maxit = 40)) %>% filter(term != "(Intercept)")
+  return(model$estimate)
+}
+
+compute_Bca_CI <-function(fit_boot, outcome){
+  Bca_inf = rep(0, length(fit_boot$t0))
+  Bca_sup = rep(0, length(fit_boot$t0))
+  for (i_regressor in 1:length(fit_boot$t0)){
+    CI <- boot.ci(fit_boot, type = "bca", index=i_regressor)
+    Bca_inf[i_regressor] <- CI$bca[4]
+    Bca_sup[i_regressor] <- CI$bca[5]
+  }
+  
+  if (outcome == "Ferritin"){
+   regressor <- fit_boot$data %>% dplyr::select(-log_ferr) %>% names()
+  }else{
+   regressor <- fit_boot$data %>% dplyr::select(-log_sTfR) %>% names()
+  }
+  
+  return(tibble(Bca_inf,Bca_sup, regressor = regressor)) 
+         
+}
+
+
+get_bootstrap <- function(data, outcome, nb_boot){
+  
+   if (outcome == "Ferritin"){
+     
+    data <- data %>% dplyr::select(-log_sTfR)
+     
+    fit_boot <- boot(data, strata = data$smoking, statistic= get_coefficients, R = nb_boot)
+  
+    fit_boot_distrib <- as.tibble(fit_boot$t)  
+    names(fit_boot_distrib) <- fit_boot$data %>% dplyr::select(-log_ferr) %>% names()
+    
+   }else{
+     
+    data <- data %>% dplyr::select(-log_ferr)
+     
+    fit_boot <- boot(data, strata = data$smoking, statistic= get_coefficients_sTfR, R = nb_boot)
+  
+    fit_boot_distrib <- as.tibble(fit_boot$t)  
+    names(fit_boot_distrib) <- fit_boot$data %>% dplyr::select(-log_sTfR) %>% names()
+    
+   }
+
+
+  fit_boot_Bca <- compute_Bca_CI(fit_boot, outcome = outcome)
+  
+  return(list(fit_boot_distrib,fit_boot_Bca))
+}
+
+preprocess_data <- function(blood_data_summary_reg, current_group){
+  
+    ## preprocess and standardize data
+  test_data_std <- blood_data_summary_reg %>% 
+    filter(group == current_group) %>% 
+    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n ) %>% 
+    gather(key = key, value = value, -donor) %>% 
+    group_by(key) %>% 
+    mutate(value = scale(value, scale = TRUE)[,1]) %>% 
+    spread(key = key, value = value)
+  
+  test_data_std <- blood_data_summary_reg %>% 
+    filter(group == current_group) %>% 
+    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct, log_last_don, smoking, pregnancy, iron) %>% 
+  mutate(age = age / 5, 
+         age = scale(age, scale = TRUE)[,1],
+         log_CRP = scale(log_CRP, scale = TRUE)[,1],
+         don_ct = scale(don_ct, scale = TRUE)[,1],
+         log_last_don = scale(log_last_don, scale = TRUE)[,1],
+         BMI = scale(BMI, scale = TRUE)[,1],
+         iron = scale(iron, scale = TRUE)[,1],
+         log_ferr = scale(log_ferr, scale = TRUE)[,1],
+         log_sTfR = scale(log_sTfR, scale = TRUE)[,1],
+         don_ct_2 = don_ct^2) %>% 
+    full_join(test_data_std, by = "donor")   %>% 
+    dplyr::select(-donor) 
+  
+  if(current_group == "Men"){
+    test_data_std <-  dplyr::select(test_data_std, -pregnancy)
+  }
+
+  return(test_data_std)
+}
+
+
+get_bootstrap_coeffs <- function(test_data_std, current_group, outcome, nb_boot )
+{
+  result <- test_data_std %>% 
+  get_bootstrap(outcome = outcome, nb_boot = nb_boot)
+
+  bootstrap_distrib <- result[[1]] %>% 
+    gather(key = regressor, value = coefficient) %>% 
+    filter(regressor != "(Intercept)") %>% 
+    mutate(group = current_group)
+    
+  Bca_CI  <- result[[2]] %>% mutate(group = current_group)
+
+  return(list(bootstrap_distrib,Bca_CI))
+}
+
+set.seed(3547)
+
+output_file_distrib = ("../results/bootstraps/beta_robust_boot_distrib_seed_3547_std_strata.rdata")
+output_file_Bca = ("../results/bootstraps/beta_robust_boot_Bca_seed_3547_std_strata.rdata")
+# 
+output_file_distrib_sTfR = ("../results/bootstraps/beta_robust_boot_distrib_seed_3547_stfR_strata.rdata")
+output_file_Bca_sTfR = ("../results/bootstraps/beta_robust_boot_Bca_seed_3547_stfR_strata.rdata")
+
+get_from_file_Ferr = TRUE
+
+if (get_from_file_Ferr){
+  load(file=output_file_distrib)
+  load(file=output_file_Bca)
+}else
+{
+   for(group_str in c("Pre_menopause_women", "Post_menopause_women","Men")){
+    
+    test_data_std <- preprocess_data(blood_data_summary_reg, group_str)
+    stuff <- get_bootstrap_coeffs(test_data_std, group_str, outcome = "Ferritin", nb_boot = 10000)
+    
+    #Remove sTfR from the data object because of model estimation
+    test_data_temp <- test_data_std %>% dplyr::select(-log_sTfR)
+    
+    bootstrap_Bca_CI_temp <- tidy(rlm(log_ferr ~ ., test_data_temp, maxit = 40)) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(term = ifelse(term == "smoking.L","smoking",term),
+             term = ifelse(term == "pregnancy.L","pregnancy",term))%>% 
+      dplyr::select(term, estimate) %>% 
+      rename(regressor = term, coefficient = estimate) %>% 
+      full_join(stuff[[2]], by = "regressor")
+      
+      
+    if(!exists("bootstrap_distrib_robust_std")){
+      bootstrap_distrib_robust_std <- stuff[[1]]
+      bootstrap_Bca_CI_robust_std <- bootstrap_Bca_CI_temp
+    }else
+    {
+      bootstrap_distrib_robust_std <- bind_rows(bootstrap_distrib_robust_std, stuff[[1]])
+      bootstrap_Bca_CI_robust_std <- bind_rows(bootstrap_Bca_CI_robust_std, bootstrap_Bca_CI_temp)
+    }
+  } 
+  save(bootstrap_distrib_robust_std,file=output_file_distrib) 
+  save(bootstrap_Bca_CI_robust_std,file=output_file_Bca)
+}
+
+bootstrap_Bca_CI_robust_std <-
+  bootstrap_Bca_CI_robust_std %>% 
+  mutate(regressor = plyr::revalue(regressor, regressor_values),
+        regressor = ordered(regressor,
+                  levels =  c("Age","CRP (log)", "BMI","Nb donations (2 years)","(Nb donations (2 years))²", 
+                              "Days since last donation",  "Smoking",  "Pregnancy", "Iron supplementation", 
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+        regressor = fct_rev(regressor),
+        group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women",
+                          group == "Post_menopause_women" ~ "Post-menopausal women",
+                          TRUE ~ "Men"),
+        group = ordered(group, levels = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )))
+
+
+get_from_file_sTfR = TRUE
+
+if (get_from_file_sTfR){
+  load(file=output_file_distrib_sTfR)
+  load(file=output_file_Bca_sTfR)
+}else
+{
+   for(group_str in c("Pre_menopause_women", "Post_menopause_women","Men")){
+    
+    test_data_std <- preprocess_data(blood_data_summary_reg, group_str)
+    stuff <- get_bootstrap_coeffs(test_data_std, group_str, outcome = "sTfR", nb_boot = 10000)
+
+       #Remove Ferritin from the data object because of model estimation
+    test_data_temp <- test_data_std %>% dplyr::select(-log_ferr)
+
+        
+    bootstrap_Bca_CI_temp <- tidy(rlm(log_sTfR ~ ., test_data_temp, maxit = 40)) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(term = ifelse(term == "smoking.L","smoking",term),
+             term = ifelse(term == "pregnancy.L","pregnancy",term))%>% 
+      dplyr::select(term, estimate) %>% 
+      rename(regressor = term, coefficient = estimate) %>% 
+      full_join(stuff[[2]], by = "regressor")
+      
+      
+    if(!exists("bootstrap_distrib_robust_std_sTfR")){
+      bootstrap_distrib_robust_std_sTfR <- stuff[[1]]
+      bootstrap_Bca_CI_robust_std_sTfR <- bootstrap_Bca_CI_temp
+    }else
+    {
+      bootstrap_distrib_robust_std_sTfR <- bind_rows(bootstrap_distrib_robust_std_sTfR, stuff[[1]])
+      bootstrap_Bca_CI_robust_std_sTfR <- bind_rows(bootstrap_Bca_CI_robust_std_sTfR, bootstrap_Bca_CI_temp)
+    }
+  } 
+  save(bootstrap_distrib_robust_std_sTfR,file=output_file_distrib_sTfR) 
+  save(bootstrap_Bca_CI_robust_std_sTfR,file=output_file_Bca_sTfR)
+}
+
+bootstrap_Bca_CI_robust_std_sTfR <- bootstrap_Bca_CI_robust_std_sTfR %>% 
+  mutate(regressor = plyr::revalue(regressor, regressor_values),
+        regressor = ordered(regressor,
+                  levels =  c("Age","CRP (log)", "BMI","Nb donations (2 years)","(Nb donations (2 years))²", 
+                              "Days since last donation",  "Smoking",  "Pregnancy", "Iron supplementation", 
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+        regressor = fct_rev(regressor),
+        group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women",
+                          group == "Post_menopause_women" ~ "Post-menopausal women",
+                          TRUE ~ "Men"),
+        group = ordered(group, levels = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )))
+```
 
 Results outputs
 ---------------
@@ -14503,6 +8038,130 @@ Results outputs
 ### Main results
 
 #### Table 2 - Outcome = Ferritin
+
+``` r
+# create pvlue list to get the p values from the appropriate package
+
+robust_p_values = list(3)
+
+p_matrix <- as.matrix(mdl_pre_menop_w %>% 
+                           dplyr::select(p_value))
+dimnames(p_matrix) = list(mdl_pre_menop_w$term) 
+  robust_p_values[[1]] = p_matrix
+
+p_matrix <- as.matrix(mdl_post_menop_w %>% 
+                           dplyr::select(p_value))
+dimnames(p_matrix) = list(mdl_post_menop_w$term) 
+robust_p_values[[2]] = p_matrix
+
+p_matrix <- as.matrix(mdl_men %>% 
+                           dplyr::select(p_value))
+dimnames(p_matrix) = list(mdl_men$term) 
+robust_p_values[[3]] = p_matrix
+```
+
+``` r
+# ouput to file
+
+stargazer(robust_mdl_pre_menop_w, robust_mdl_post_menop_w, robust_mdl_men,
+          out = "../results/tables/table_2_robust_regressions_complete__values.html",
+          style = "all", 
+          intercept.bottom = FALSE,
+          title = "Table 2 - Multivariate robust regression analyses - Ferritin",
+          type = "html",
+          # se = TRUE,
+          single.row = TRUE,
+          ci = TRUE,
+          ci.custom = CI_regression_robust,
+          p = robust_p_values,
+          omit = "Constant",
+          header = FALSE,
+          covariate.labels = c("Age", "BMI", "ln(CRP)", "Smoking(yes)", "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "ln(Days since last donation)",
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          dep.var.caption   = "Ferritin (log)", 
+          dep.var.labels.include = FALSE,
+          column.labels = c("Pre-menopausal women", "Post-menopausal women", "Men"),
+          model.numbers= FALSE,
+          report=('vcsp'),
+          digits = 3)
+```
+
+    ## 
+    ## <table style="text-align:center"><caption><strong>Table 2 - Multivariate robust regression analyses - Ferritin</strong></caption>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"></td><td colspan="3">Ferritin (log)</td></tr>
+    ## <tr><td></td><td colspan="3" style="border-bottom: 1px solid black"></td></tr>
+    ## <tr><td style="text-align:left"></td><td>Pre-menopausal women</td><td>Post-menopausal women</td><td>Men</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Age</td><td>0.073 (0.042, 0.103)</td><td>0.047 (-0.003, 0.097)</td><td>0.023 (0.006, 0.038)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.072</td><td>p = 0.004</td></tr>
+    ## <tr><td style="text-align:left">BMI</td><td>0.017 (0.007, 0.027)</td><td>0.018 (0.005, 0.031)</td><td>0.037 (0.026, 0.047)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.0005</td><td>p = 0.006</td><td>p = 0.000</td></tr>
+    ## <tr><td style="text-align:left">ln(CRP)</td><td>0.063 (-0.078, 0.208)</td><td>0.062 (-0.181, 0.290)</td><td>-0.015 (-0.256, 0.187)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.367</td><td>p = 0.601</td><td>p = 0.883</td></tr>
+    ## <tr><td style="text-align:left">Smoking(yes)</td><td>0.091 (0.001, 0.176)</td><td>0.077 (-0.064, 0.202)</td><td>0.076 (-0.012, 0.163)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.047</td><td>p = 0.273</td><td>p = 0.080</td></tr>
+    ## <tr><td style="text-align:left">Pregnancy(Yes)</td><td>0.020 (-0.064, 0.104)</td><td>-0.004 (-0.094, 0.081)</td><td></td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.649</td><td>p = 0.929</td><td></td></tr>
+    ## <tr><td style="text-align:left">Nb donations (2 years)</td><td>-0.060 (-0.097, -0.022)</td><td>-0.034 (-0.071, 0.007)</td><td>-0.089 (-0.110, -0.069)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.002</td><td>p = 0.105</td><td>p = 0.000</td></tr>
+    ## <tr><td style="text-align:left">(Nb donations (2 years))²</td><td>0.010 (-0.005, 0.026)</td><td>0.006 (-0.012, 0.023)</td><td>0.007 (0.002, 0.012)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.165</td><td>p = 0.450</td><td>p = 0.004</td></tr>
+    ## <tr><td style="text-align:left">ln(Days since last donation)</td><td>0.134 (0.082, 0.190)</td><td>0.231 (0.157, 0.308)</td><td>0.165 (0.121, 0.211)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.000</td><td>p = 0.000</td></tr>
+    ## <tr><td style="text-align:left">iron supplementation</td><td>-0.002 (-0.034, 0.029)</td><td>-0.017 (-0.062, 0.027)</td><td>-0.045 (-0.079, -0.013)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.895</td><td>p = 0.450</td><td>p = 0.005</td></tr>
+    ## <tr><td style="text-align:left">Red meat</td><td>0.134 (0.081, 0.188)</td><td>0.113 (0.035, 0.188)</td><td>0.098 (0.043, 0.155)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.006</td><td>p = 0.001</td></tr>
+    ## <tr><td style="text-align:left">Vegetables</td><td>-0.013 (-0.128, 0.104)</td><td>0.025 (-0.113, 0.167)</td><td>0.031 (-0.049, 0.104)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.822</td><td>p = 0.735</td><td>p = 0.433</td></tr>
+    ## <tr><td style="text-align:left">Fruit and Berries</td><td>0.031 (-0.065, 0.131)</td><td>-0.142 (-0.271, 0.001)</td><td>0.011 (-0.055, 0.079)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.505</td><td>p = 0.034</td><td>p = 0.737</td></tr>
+    ## <tr><td style="text-align:left">Milk</td><td>-0.057 (-0.113, -0.004)</td><td>-0.039 (-0.107, 0.032)</td><td>-0.036 (-0.078, 0.006)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.038</td><td>p = 0.269</td><td>p = 0.120</td></tr>
+    ## <tr><td style="text-align:left">Fruit Juices</td><td>-0.004 (-0.057, 0.049)</td><td>-0.001 (-0.057, 0.053)</td><td>-0.018 (-0.061, 0.023)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.889</td><td>p = 0.959</td><td>p = 0.373</td></tr>
+    ## <tr><td style="text-align:left">Coffee</td><td>0.019 (-0.019, 0.058)</td><td>-0.003 (-0.066, 0.062)</td><td>0.013 (-0.027, 0.053)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.347</td><td>p = 0.915</td><td>p = 0.484</td></tr>
+    ## <tr><td style="text-align:left">Tea</td><td>-0.029 (-0.073, 0.013)</td><td>0.043 (-0.008, 0.095)</td><td>0.011 (-0.025, 0.045)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.185</td><td>p = 0.112</td><td>p = 0.563</td></tr>
+    ## <tr><td style="text-align:left">Beer</td><td>0.012 (-0.059, 0.084)</td><td>0.084 (-0.0001, 0.174)</td><td>0.050 (0.0004, 0.101)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.740</td><td>p = 0.046</td><td>p = 0.044</td></tr>
+    ## <tr><td style="text-align:left">Wine</td><td>0.060 (-0.014, 0.135)</td><td>0.080 (-0.001, 0.157)</td><td>0.061 (0.003, 0.122)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.098</td><td>p = 0.034</td><td>p = 0.040</td></tr>
+    ## <tr><td style="text-align:left">Liquor</td><td>0.001 (-0.112, 0.108)</td><td>-0.071 (-0.243, 0.070)</td><td>0.056 (-0.015, 0.129)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.983</td><td>p = 0.410</td><td>p = 0.113</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Observations</td><td>846</td><td>452</td><td>902</td></tr>
+    ## <tr><td style="text-align:left">Residual Std. Error</td><td>0.612 (df = 826)</td><td>0.530 (df = 432)</td><td>0.517 (df = 883)</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"><em>Note:</em></td><td colspan="3" style="text-align:right"><sup>*</sup>p<0.1; <sup>**</sup>p<0.05; <sup>***</sup>p<0.01</td></tr>
+    ## </table>
+
+``` r
+stargazer(robust_mdl_pre_menop_w, robust_mdl_post_menop_w, robust_mdl_men,
+          style = "all", 
+          intercept.bottom = FALSE,
+          title = "Table 2 - Multivariate robust regression analyses - Ferritin",
+          type = "html",
+          # se = TRUE,
+          single.row = TRUE,
+          ci = TRUE,
+          ci.custom = CI_regression_robust,
+          p = robust_p_values,
+          omit = "Constant",
+          header = FALSE,
+          covariate.labels = c("Age", "BMI", "ln(CRP)", "Smoking(yes)", "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "ln(Days since last donation)",
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          dep.var.caption   = "Ferritin (log)", 
+          dep.var.labels.include = FALSE,
+          column.labels = c("Pre-menopausal women", "Post-menopausal women", "Men"),
+          # column.separate = c(2, 2,2),
+          model.numbers= FALSE,
+          report=('vcsp'),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          digits = 3)
+```
 
 <table style="text-align:center">
 <caption>
@@ -15099,6 +8758,130 @@ Residual Std. Error
 </tr>
 </table>
 #### Table 3 - Outcome = sTfR
+
+``` r
+# create pvlue list to get the p values from the appropriate package
+
+robust_p_values_sTfR = list(3)
+
+p_matrix <- as.matrix(mdl_sTfR_pre_menop_w %>% 
+                           dplyr::select(p_value))
+dimnames(p_matrix) = list(mdl_sTfR_pre_menop_w$term) 
+  robust_p_values_sTfR[[1]] = p_matrix
+
+p_matrix <- as.matrix(mdl_sTfR_post_menop_w %>% 
+                           dplyr::select(p_value))
+dimnames(p_matrix) = list(mdl_sTfR_post_menop_w$term) 
+robust_p_values_sTfR[[2]] = p_matrix
+
+p_matrix <- as.matrix(mdl_sTfR_men %>% 
+                           dplyr::select(p_value))
+dimnames(p_matrix) = list(mdl_sTfR_men$term) 
+robust_p_values_sTfR[[3]] = p_matrix
+```
+
+``` r
+# SAve output to file
+
+stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_sTfR_men,
+          out = "../results/tables/table_3_robust_regressions_complete__values.html",
+          style = "all", 
+          intercept.bottom = FALSE,
+          title = "Table 3 - Multivariable robust regression analyses - sTfR",
+          type = "html",
+          # se = TRUE,
+          single.row = TRUE,
+          ci = TRUE,
+          ci.custom = CI_regression_robust_sTfR,
+          p = robust_p_values,
+          omit = "Constant",
+          header = FALSE,
+          covariate.labels = c("Age", "BMI", "ln(CRP)", "Smoking(yes)", "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "ln(Days since last donation)",
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          dep.var.caption   = "sTfR (log)", 
+          dep.var.labels.include = FALSE,
+          column.labels = c("Pre-menopausal women", "Post-menopausal women", "Men"),
+          model.numbers= FALSE,
+          report=('vcsp'),
+          digits = 3)
+```
+
+    ## 
+    ## <table style="text-align:center"><caption><strong>Table 3 - Multivariable robust regression analyses - sTfR</strong></caption>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"></td><td colspan="3">sTfR (log)</td></tr>
+    ## <tr><td></td><td colspan="3" style="border-bottom: 1px solid black"></td></tr>
+    ## <tr><td style="text-align:left"></td><td>Pre-menopausal women</td><td>Post-menopausal women</td><td>Men</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Age</td><td>-0.028 (-0.044, -0.013)</td><td>0.001 (-0.025, 0.026)</td><td>-0.009 (-0.017, -0.0002)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.072</td><td>p = 0.004</td></tr>
+    ## <tr><td style="text-align:left">BMI</td><td>0.003 (-0.001, 0.008)</td><td>0.001 (-0.006, 0.007)</td><td>0.003 (-0.002, 0.008)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.0005</td><td>p = 0.006</td><td>p = 0.000</td></tr>
+    ## <tr><td style="text-align:left">ln(CRP)</td><td>0.026 (-0.042, 0.092)</td><td>0.049 (-0.059, 0.141)</td><td>0.110 (0.011, 0.202)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.367</td><td>p = 0.601</td><td>p = 0.883</td></tr>
+    ## <tr><td style="text-align:left">Smoking(yes)</td><td>-0.048 (-0.094, -0.003)</td><td>-0.065 (-0.133, 0.001)</td><td>-0.054 (-0.097, -0.011)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.047</td><td>p = 0.273</td><td>p = 0.080</td></tr>
+    ## <tr><td style="text-align:left">Pregnancy(Yes)</td><td>0.020 (-0.027, 0.068)</td><td>-0.036 (-0.080, 0.009)</td><td></td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.649</td><td>p = 0.929</td><td></td></tr>
+    ## <tr><td style="text-align:left">Nb donations (2 years)</td><td>0.025 (0.007, 0.044)</td><td>-0.007 (-0.028, 0.015)</td><td>0.020 (0.009, 0.030)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.002</td><td>p = 0.105</td><td>p = 0.000</td></tr>
+    ## <tr><td style="text-align:left">(Nb donations (2 years))²</td><td>-0.006 (-0.013, 0.002)</td><td>0.002 (-0.007, 0.010)</td><td>0.0001 (-0.002, 0.003)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.165</td><td>p = 0.450</td><td>p = 0.004</td></tr>
+    ## <tr><td style="text-align:left">ln(Days since last donation)</td><td>-0.019 (-0.045, 0.006)</td><td>-0.048 (-0.086, -0.009)</td><td>-0.019 (-0.043, 0.003)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.000</td><td>p = 0.000</td></tr>
+    ## <tr><td style="text-align:left">iron supplementation</td><td>0.001 (-0.015, 0.017)</td><td>0.001 (-0.021, 0.023)</td><td>0.012 (-0.005, 0.029)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.895</td><td>p = 0.450</td><td>p = 0.005</td></tr>
+    ## <tr><td style="text-align:left">Red meat</td><td>-0.075 (-0.103, -0.047)</td><td>0.004 (-0.032, 0.043)</td><td>-0.027 (-0.057, 0.005)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.006</td><td>p = 0.001</td></tr>
+    ## <tr><td style="text-align:left">Vegetables</td><td>-0.018 (-0.076, 0.043)</td><td>-0.005 (-0.072, 0.062)</td><td>-0.022 (-0.064, 0.022)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.822</td><td>p = 0.735</td><td>p = 0.433</td></tr>
+    ## <tr><td style="text-align:left">Fruit and Berries</td><td>0.008 (-0.038, 0.054)</td><td>-0.007 (-0.069, 0.060)</td><td>-0.002 (-0.041, 0.034)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.505</td><td>p = 0.034</td><td>p = 0.737</td></tr>
+    ## <tr><td style="text-align:left">Milk</td><td>0.040 (0.013, 0.068)</td><td>0.039 (0.003, 0.073)</td><td>0.019 (-0.007, 0.045)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.038</td><td>p = 0.269</td><td>p = 0.120</td></tr>
+    ## <tr><td style="text-align:left">Fruit Juices</td><td>-0.002 (-0.029, 0.026)</td><td>0.006 (-0.023, 0.036)</td><td>0.005 (-0.017, 0.027)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.889</td><td>p = 0.959</td><td>p = 0.373</td></tr>
+    ## <tr><td style="text-align:left">Coffee</td><td>-0.038 (-0.058, -0.017)</td><td>-0.016 (-0.047, 0.018)</td><td>-0.009 (-0.032, 0.012)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.347</td><td>p = 0.915</td><td>p = 0.484</td></tr>
+    ## <tr><td style="text-align:left">Tea</td><td>0.004 (-0.019, 0.026)</td><td>-0.003 (-0.030, 0.023)</td><td>0.001 (-0.019, 0.020)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.185</td><td>p = 0.112</td><td>p = 0.563</td></tr>
+    ## <tr><td style="text-align:left">Beer</td><td>0.003 (-0.033, 0.037)</td><td>-0.020 (-0.063, 0.024)</td><td>-0.019 (-0.045, 0.008)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.740</td><td>p = 0.046</td><td>p = 0.044</td></tr>
+    ## <tr><td style="text-align:left">Wine</td><td>-0.013 (-0.048, 0.019)</td><td>-0.040 (-0.078, -0.004)</td><td>-0.029 (-0.059, 0.0001)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.098</td><td>p = 0.034</td><td>p = 0.040</td></tr>
+    ## <tr><td style="text-align:left">Liquor</td><td>0.034 (-0.019, 0.088)</td><td>-0.001 (-0.082, 0.080)</td><td>0.012 (-0.027, 0.048)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.983</td><td>p = 0.410</td><td>p = 0.113</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Observations</td><td>846</td><td>452</td><td>902</td></tr>
+    ## <tr><td style="text-align:left">Residual Std. Error</td><td>0.302 (df = 826)</td><td>0.290 (df = 432)</td><td>0.281 (df = 883)</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"><em>Note:</em></td><td colspan="3" style="text-align:right"><sup>*</sup>p<0.1; <sup>**</sup>p<0.05; <sup>***</sup>p<0.01</td></tr>
+    ## </table>
+
+``` r
+stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_sTfR_men,
+          style = "all", 
+          intercept.bottom = FALSE,
+          title = "Table 3 - Multivariable robust regression analyses - sTfR",
+          type = "html",
+          # se = TRUE,
+          single.row = TRUE,
+          ci = TRUE,
+          ci.custom = CI_regression_robust,
+          p = robust_p_values,
+          omit = "Constant",
+          header = FALSE,
+          covariate.labels = c("Age", "BMI", "ln(CRP)", "Smoking(yes)", "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "ln(Days since last donation)",
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          dep.var.caption   = "Ferritin (log)", 
+          dep.var.labels.include = FALSE,
+          column.labels = c("Pre-menopausal women", "Post-menopausal women", "Men"),
+          # column.separate = c(2, 2,2),
+          model.numbers= FALSE,
+          report=('vcsp'),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          digits = 3)
+```
 
 <table style="text-align:center">
 <caption>
@@ -15700,40 +9483,411 @@ Residual Std. Error
 
 The bootstrapped coefficients that are displayed are the standardized coefficients.
 
-![](index_files/figure-markdown_github/unnamed-chunk-100-1.png)
+``` r
+bootstrap_distrib_robust_std %>% 
+  mutate(regressor = plyr::revalue(regressor, regressor_values),
+  regressor = ordered(regressor,
+                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)","(Nb donations (2 years))²", 
+                              "Days since last donation",  "Iron supplementation", 
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+  regressor = fct_rev(regressor),
+  group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women",
+    group == "Post_menopause_women" ~ "Post-menopausal women",
+    TRUE ~ "Men"),
+  group = ordered(group, levels = c( "Men",  "Post-menopausal women", "Pre-menopausal women" ) )) %>% 
+  ggplot(aes(x = regressor, y = coefficient, color = group, fill = group)) +
+  geom_hline(yintercept = 0 , color = "grey", linetype = "dotted") +
+  geom_violin(alpha = 0.15, trim = TRUE, position = position_dodge(width = 0.8), size = 0.1) +
+  geom_linerange(data = bootstrap_Bca_CI_robust_std, aes(ymin=Bca_inf, ymax = Bca_sup ),
+                  position = position_dodge(width = 0.8), size = 0.4) +
+  geom_point(data = bootstrap_Bca_CI_robust_std, position = position_dodge(width = 0.8), size = 0.75, shape = 4) +
+  scale_color_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
+                     limits = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )) +
+  scale_fill_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
+                     limits = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )) +
+  theme_classic() +
+  theme(legend.position = "bottom",
+        panel.grid.minor.y = element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8),
+        axis.text = element_text(size = 6),
+        panel.grid.major.y = element_blank()) +
+  coord_flip() +
+  xlab("Robust standardized coefficient")
+```
 
-    ##  [1] Age                       CRP (log)                
-    ##  [3] BMI                       Nb donations (2 years)   
-    ##  [5] Days since last donation  Smoking                  
-    ##  [7] Pregnancy                 Iron supplementation     
-    ##  [9] (Nb donations (2 years))² Beer                     
-    ## [11] Coffee                    Fruit and Berries        
-    ## [13] Fruit Juices              Liquor                   
-    ## [15] Milk                      Red meat                 
-    ## [17] Tea                       Vegetables               
-    ## [19] Wine                     
-    ## 19 Levels: Liquor < Wine < Beer < Tea < Coffee < Fruit Juices < ... < Age
+![](index_files/figure-markdown_github/unnamed-chunk-99-1.png)
 
-![](index_files/figure-markdown_github/unnamed-chunk-102-1.png)
+``` r
+ggplot2::ggsave("../results/figures/Figure_2_coeffs_Ferritin.png",device = "png", height = 17, width = 6.75, units = "cm" )
+```
+
+``` r
+test <- bootstrap_distrib_robust_std_sTfR %>% 
+  mutate(regressor = plyr::revalue(regressor, regressor_values),
+  regressor = ordered(regressor,
+                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)","(Nb donations (2 years))²", 
+                              "Days since last donation",  "Iron supplementation", 
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+  regressor = fct_rev(regressor))
+```
+
+``` r
+bootstrap_distrib_robust_std_sTfR %>% 
+  mutate(regressor = plyr::revalue(regressor, regressor_values),
+  regressor = ordered(regressor,
+                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)","(Nb donations (2 years))²", 
+                              "Days since last donation",  "Iron supplementation", 
+                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
+  regressor = fct_rev(regressor),
+  group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women",
+    group == "Post_menopause_women" ~ "Post-menopausal women",
+    TRUE ~ "Men"),
+  group = ordered(group, levels = c( "Men",  "Post-menopausal women", "Pre-menopausal women" ) )) %>% 
+  ggplot(aes(x = regressor, y = coefficient, color = group, fill = group)) +
+  geom_hline(yintercept = 0 , color = "grey", linetype = "dotted") +
+  geom_violin(alpha = 0.15, trim = TRUE, position = position_dodge(width = 0.8), size = 0.1) +
+  geom_linerange(data = bootstrap_Bca_CI_robust_std_sTfR, aes(ymin=Bca_inf, ymax = Bca_sup ),
+                  position = position_dodge(width = 0.8), size = 0.4) +
+  geom_point(data = bootstrap_Bca_CI_robust_std_sTfR, position = position_dodge(width = 0.8), size = 0.75, shape = 4) +
+  scale_color_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
+                     limits = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )) +
+  scale_fill_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
+                     limits = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )) +
+  theme_classic() +
+  theme(legend.position = "bottom",
+        panel.grid.minor.y = element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8),
+        axis.text = element_text(size = 6),
+        panel.grid.major.y = element_blank()) +
+  coord_flip() +
+  xlab("Robust standardized coefficient")
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-101-1.png)
+
+``` r
+ggplot2::ggsave("../results/figures/Figure_2_coeffs_sTfR.png",device = "png", height = 17, width = 6.75, units = "cm" )
+```
 
 ##### Relative importance
 
 ###### Ferritin
 
-![](index_files/figure-markdown_github/unnamed-chunk-103-1.png)
+``` r
+plot_data_lm7_men$group <- "Men"
+plot_data_lm7_pre_menop$group <- "Pre_menopause_women"
+plot_data_lm7_post_menop$group <- "Post_menopause_women"
+
+relativ_impo_data <- bind_rows(plot_data_lm7_men,
+                              plot_data_lm7_pre_menop,
+                             plot_data_lm7_post_menop) %>% 
+mutate(group = factor(group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men")))
+  
+relativ_impo_data <- relativ_impo_data %>% 
+  mutate(regressor = ifelse(regressor == "smoking", "smokingyes", regressor)) %>% 
+  full_join(lm_signs_std, by = c("regressor", "group")) %>% 
+  mutate(regressor = ifelse(regressor == "smokingyes", "smoking", regressor)) %>%
+  dplyr::filter(regressor %in% c("age", "BMI","log_CRP", "don_ct", "don_ct_2", "log_last_don", 
+                                "smoking", "iron", "red_meat_n", "milk_n", "beer_n", "wine_n")) %>% 
+  mutate(lmg = lmg *beta_sign * 100,
+         lmg_inf = lmg_inf * beta_sign * 100,
+         lmg_sup = lmg_sup * beta_sign * 100)
+
+dodge <- position_dodge(width=0.9)
+
+plt <- relativ_impo_data %>% 
+  mutate(regressor = case_when(
+  regressor == "don_ct" ~ "Nb donations (2 years)",
+  regressor == "don_ct_2" ~ "(Nb donations (2 years))²",
+  regressor == "log_last_don" ~ "Time since last donation",
+  regressor == "iron" ~ "Iron supplementation",
+  regressor == "log_CRP" ~"CRP",
+  regressor == "smoking" ~"Smoking",
+  regressor == "age" ~"Age",
+  regressor == "milk_n" ~"Milk",
+  regressor == "beer_n" ~"Beer",
+  regressor == "wine_n" ~"Wine",
+  regressor == "red_meat_n" ~"Red meat",
+  TRUE ~regressor)) %>% 
+  mutate(regressor = ordered(regressor, 
+                  levels = c("Wine", "Beer", "Red meat", "Milk", "Iron supplementation",  "Time since last donation", 
+                             "(Nb donations (2 years))²", "Nb donations (2 years)", "Smoking", "CRP", "BMI",  "Age"))) %>%
+  mutate(group_2 = case_when(
+    group == "Pre_menopause_women" ~ "Pre-menopausal women",
+    group == "Post_menopause_women" ~ "Post-menopausal women",
+    TRUE ~ "Men"),
+          group_2 = ordered(group_2, levels = c(  "Men", "Post-menopausal women", "Pre-menopausal women") )) %>% 
+  ggplot(aes(x=regressor, y = lmg, fill = group_2)) +
+  geom_col(position = dodge) +
+  geom_linerange(aes( ymin=lmg_inf, ymax = lmg_sup), position = dodge, size = 0.4, color = "dark grey") +
+  scale_fill_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c("Pre-menopausal women", "Post-menopausal women","Men" )) +
+  coord_flip() +
+  theme_bw() +
+   theme(legend.position = "none", 
+        panel.grid.minor.y = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 8*1.333333), # weird sizing issue ...
+        axis.line = element_line(colour="black"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8*1.3333),
+        axis.text = element_text(size = 6*1.333333),
+        panel.grid.major.y = element_blank()) +
+  ylab("Average percentage of explained \nvariance (pmvd)")
+
+plt 
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-102-1.png)
+
+``` r
+ggplot2::ggsave("../results/figures/figure_2_rela_impo_ferritin.svg", plt,  height = 6.75 * 1.25, width = 6.75 * 1.25, units = "cm", dpi = 300 )
+```
 
 ###### sTfR
 
-![](index_files/figure-markdown_github/unnamed-chunk-104-1.png)
+``` r
+plot_data_lm7_men_sTfR$group <- "Men"
+plot_data_lm7_pre_menop_sTfR$group <- "Pre_menopause_women"
+plot_data_lm7_post_menop_sTfR$group <- "Post_menopause_women"
+
+relativ_impo_data_sTfR <- bind_rows(plot_data_lm7_men_sTfR,
+                              plot_data_lm7_pre_menop_sTfR,
+                             plot_data_lm7_post_menop_sTfR) %>% 
+mutate(group = factor(group, levels =  c("Pre_menopause_women", "Post_menopause_women", "Men")))
+  
+relativ_impo_data_sTfR <- relativ_impo_data_sTfR %>% 
+  mutate(regressor = ifelse(regressor == "smoking", "smokingyes", regressor)) %>% 
+  full_join(lm_signs_sTfR, by = c("regressor", "group")) %>% 
+  mutate(regressor = ifelse(regressor == "smokingyes", "smoking", regressor)) %>%
+  dplyr::filter(regressor %in% c("age", "BMI","log_CRP", "don_ct", "don_ct_2", "log_last_don", 
+                                "smoking", "iron", "red_meat_n", "milk_n", "beer_n", "wine_n")) %>% 
+  mutate(lmg = lmg *beta_sign * 100,
+         lmg_inf = lmg_inf * beta_sign * 100,
+         lmg_sup = lmg_sup * beta_sign * 100)
+
+dodge <- position_dodge(width=0.9)
+
+plt <- relativ_impo_data_sTfR %>% 
+  mutate(regressor = case_when(
+  regressor == "don_ct" ~ "Nb donations (2 years)",
+  regressor == "don_ct_2" ~ "(Nb donations (2 years))²",
+  regressor == "log_last_don" ~ "Time since last donation",
+  regressor == "iron" ~ "Iron supplementation",
+  regressor == "log_CRP" ~"CRP",
+  regressor == "smoking" ~"Smoking",
+  regressor == "age" ~"Age",
+  regressor == "wine_n" ~"Wine",
+  regressor == "red_meat_n" ~ "Red meat",
+  regressor == "milk_n" ~ "Milk",
+  regressor == "beer_n" ~ "Beer",
+  TRUE ~regressor)) %>% 
+  mutate(regressor = ordered(regressor, 
+                  levels = c("Wine", "Beer", "Red meat", "Milk", "Iron supplementation",  "Time since last donation", 
+                             "(Nb donations (2 years))²", "Nb donations (2 years)", "Smoking", "CRP", "BMI",  "Age"))) %>%
+  mutate(group_2 = case_when(
+    group == "Pre_menopause_women" ~ "Pre-menopausal women",
+    group == "Post_menopause_women" ~ "Post-menopausal women",
+    TRUE ~ "Men"),
+          group_2 = ordered(group_2, levels = c(  "Men", "Post-menopausal women", "Pre-menopausal women") )) %>% 
+  ggplot(aes(x=regressor, y = lmg, fill = group_2)) +
+  geom_col(position = dodge) +
+  geom_linerange(aes( ymin=lmg_inf, ymax = lmg_sup), position = dodge, size = 0.4, color = "dark grey") +
+  scale_fill_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c("Pre-menopausal women", "Post-menopausal women","Men" )) +
+  coord_flip() +
+  theme_bw() +
+   theme(legend.position = "none", 
+        panel.grid.minor.y = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 8*1.333333), # weird sizing issue ...
+        axis.line = element_line(colour="black"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 8*1.3333),,
+        axis.text = element_text(size = 6*1.333333),
+        panel.grid.major.y = element_blank()) +
+  ylab("Average percentage of explained \nvariance (pmvd)")
+
+plt 
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-103-1.png)
+
+``` r
+ggplot2::ggsave("../results/figures/figure_2_rela_impo_sTfR.svg", plt,  height = 6.75 * 1.25, width = 6.75 * 1.25, units = "cm", dpi = 300 )
+```
 
 #### Figure 3 : Effects of main predictors of interest
 
-![](index_files/figure-markdown_github/unnamed-chunk-105-1.png)
+``` r
+plt_1 <-blood_data_summary_final %>%
+  dplyr::select(donor, group2, Ferritin, 
+         TwoYearsFromStartCount_FB) %>% 
+  ggplot(aes(x=TwoYearsFromStartCount_FB, y=Ferritin)) +
+  geom_hline(data = threshold, aes(yintercept = Ferritin_thresh), color = "dark red", size = .2) +
+  geom_jitter(aes(color = group2), alpha = 0.25, width = 0.2, size = 0.2, height = 0, shape = 1) +
+  geom_boxplot(aes(color = group2, group = TwoYearsFromStartCount_FB), alpha = 0,
+               width = 0.4,
+               outlier.alpha = 0) +
+  facet_grid(group2~.) +
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c("Pre-menopausal women", "Post-menopausal women","Men" )) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+       panel.border = element_rect(colour = NA),
+        strip.background=element_blank(),
+        strip.text = element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.title.x = element_text(size = 8),
+        axis.title.y =element_text(size = 8),
+        axis.text = element_text(size = 8)) +
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+  scale_x_continuous(breaks=c(0, 2, 4,6,8, 10, 12)) +
+  xlab("Nb of donations (2 years)") +
+  ylab(expression("Ferritin ("*mu* "g/l)")) 
+
+plt_2 <-blood_data_summary_final %>%
+  dplyr::select(donor, group2, Ferritin, 
+         DaysToPreviousFB) %>% 
+ ggplot(aes(x=DaysToPreviousFB, y=Ferritin)) +
+  geom_hline(data = threshold, aes(yintercept = Ferritin_thresh), color = "dark red", size = .2) +
+  geom_point(aes(color = group2), alpha = 0.4,  size = 0.7, shape =1) +
+  facet_grid(group2~., 
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE))  +
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c("Pre-menopausal women", "Post-menopausal women","Men" )) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 10),
+        axis.line = element_line(colour="black"),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size = 8)) +
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+  scale_x_log10(breaks=c(60, 90,180,360,1000)) +
+  xlab("Days since last donation") +
+  ylab("")
+
+plt_3 <- blood_data_summary_final %>% 
+  mutate(iron_comp_f = case_when(
+    iron_comp_c == 3 ~ "All or almost all",
+    iron_comp_c == 2 ~ "About half",
+    iron_comp_c == 1 ~ "Less than half",
+    iron_comp_c == 0 ~ "None",
+    TRUE ~ "NA"),
+  iron_comp_f = ordered(iron_comp_f, 
+                  levels = c("NA","None", "Less than half",  "About half","All or almost all" ))) %>% 
+  dplyr::select(group2, iron_comp_f, Ferritin) %>% 
+  ggplot(aes(x = iron_comp_f, y = Ferritin, color = group2 )) +
+  geom_hline(data = threshold, aes(yintercept = Ferritin_thresh), color = "dark red", size = .2) +
+  geom_boxplot(outlier.alpha = 0, position = "dodge", width = 0.5) +
+  geom_jitter(width = 0.25, height = 0, shape = 1, size = 0.2, alpha = 0.25) +
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c( "Pre-menopausal women", "Post-menopausal women", "Men" )) +
+  facet_grid(group2~., 
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE)) +
+ theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+       panel.border = element_rect(colour = NA),
+        strip.background=element_blank(),
+        strip.text = element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.text.x=element_text(angle=20,hjust=1),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8),
+        axis.text = element_text(size = 8)) +
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+  xlab("Iron supplementation")  + 
+  ylab(expression("Ferritin ("*mu* "g/l)")) 
+
+plt_4 <- blood_data_summary_final %>% 
+    mutate(red_meat = case_when(red_meat == "never" ~  "Never",
+    red_meat == "less_than_once_weekly" ~ "Less than weekly",
+    red_meat %in% c("1.3_week" , "4.6_week") ~ "Several weekly",
+    TRUE   ~ "Daily or more" ), 
+    red_meat = ordered(red_meat, 
+                  levels = c("Never", "Less than weekly", "Several weekly", "Daily or more" ))) %>% 
+  dplyr::select(group2, red_meat, Ferritin) %>% 
+  ggplot(aes(x = red_meat, y = Ferritin, color = group2 )) +
+  geom_hline(data = threshold, aes(yintercept = Ferritin_thresh), color = "dark red", size = .2) +
+  geom_boxplot(outlier.alpha = 0, position = "dodge", width = 0.5) +
+  geom_jitter(width = 0.25, height = 0, shape = 1, size = 0.2, alpha = 0.3) +
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c( "Pre-menopausal women", "Post-menopausal women", "Men" )) +
+  facet_grid(group2~., 
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE)) +
+ theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 10),
+        axis.line = element_line(colour="black"),
+        axis.text.x=element_text(angle=20,hjust=1),
+        axis.title.x =  element_text(size = 8),
+       axis.title.y =  element_blank(),
+        axis.text = element_text(size = 8)) +
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+  xlab("Red meat") 
+
+plt2 <- cowplot::plot_grid(plt_1, plt_2, plt_3, plt_4,  ncol = 2, labels = c("A", "B", "C", "D"))
+
+plt2
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-104-1.png)
+
+``` r
+cowplot::save_plot("../results/figures/Figure_3_predictors.png",plt2, base_height = NULL,
+          base_aspect_ratio = .5, base_width = 11.5 * .394 ) # make room for figure legend
+```
 
 Supplementary results
 ---------------------
 
 ### Supp Table 1: OLS ferritin regression
+
+``` r
+stargazer(lm7_pre_menop_std, lm7_post_menop_std, lm7_men_std,
+          out = "../results/tables/Supp_table_3_OLS_regressions_with_p.html",
+          style = "all", 
+          intercept.bottom = FALSE,
+          title = "Supplementary table 3 - Multivariate linear regression (OLS) - Ferritin",
+          type = "html",
+          # se = TRUE,
+          single.row = TRUE,
+          ci = TRUE,
+          ci.custom = CI_regression_Ferr,
+          omit = "Constant",
+          header = FALSE,
+          covariate.labels = c("Age", "BMI", "ln(CRP)", "Smoking(yes)", "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "ln(Days since last donation)",
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+          dep.var.caption   = "Ferritin (log)", 
+          dep.var.labels.include = FALSE,
+          column.labels = c("Pre-menopausal women", "Post-menopausal women", "Men"),
+          model.numbers= FALSE,
+          report=('vcsp'),
+          star.cutoffs = c(0.05, 0.01, 0.001),
+          digits = 2)
+```
 
 <table style="text-align:center">
 <caption>
@@ -16373,9 +10527,213 @@ F Statistic
 </table>
 ### Supp Table 2: Regression of sTfR
 
+``` r
+stargazer(lm7_pre_menop_sTfR, lm7_post_menop_sTfR,lm7_men_sTfR,
+          out = "../results/tables/supp_table_2_sTfR_regressions_coeffs_OLS.html",
+          intercept.bottom = FALSE,
+          title = "Supplementary Table 3 - Multivariable linear regression Analyses (sTfR)",
+          type = "html",
+          single.row = TRUE,
+          ci = TRUE,
+          ci.custom = CI_regression_sTfR,
+          omit = "Constant",
+          header = FALSE,
+          covariate.labels = c("Age", "BMI", "CRP", "Smoking(yes)", "Pregnancy(Yes)",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
+                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),          
+          dep.var.caption   = "sTfR (log)",
+          dep.var.labels.include = FALSE,
+          column.labels = c("Pre-menopausal women", "Post-menopausal women", "Men"),
+          # column.separate = c(2, 2,2),
+          model.numbers= FALSE,
+          report=('vcsp'),
+          digits = 3)
+```
+
+    ## 
+    ## <table style="text-align:center"><caption><strong>Supplementary Table 3 - Multivariable linear regression Analyses (sTfR)</strong></caption>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"></td><td colspan="3">sTfR (log)</td></tr>
+    ## <tr><td></td><td colspan="3" style="border-bottom: 1px solid black"></td></tr>
+    ## <tr><td style="text-align:left"></td><td>Pre-menopausal women</td><td>Post-menopausal women</td><td>Men</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Age</td><td>-0.027 (-0.042, -0.011)</td><td>-0.002 (-0.026, 0.022)</td><td>-0.010 (-0.018, -0.002)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.0004</td><td>p = 0.892</td><td>p = 0.016</td></tr>
+    ## <tr><td style="text-align:left">BMI</td><td>0.003 (-0.001, 0.007)</td><td>0.001 (-0.005, 0.007)</td><td>0.004 (-0.001, 0.009)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.207</td><td>p = 0.728</td><td>p = 0.128</td></tr>
+    ## <tr><td style="text-align:left">CRP</td><td>0.030 (-0.031, 0.095)</td><td>0.041 (-0.068, 0.136)</td><td>0.119 (0.025, 0.211)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.389</td><td>p = 0.488</td><td>p = 0.026</td></tr>
+    ## <tr><td style="text-align:left">Smoking(yes)</td><td>-0.048 (-0.092, -0.005)</td><td>-0.071 (-0.138, -0.009)</td><td>-0.055 (-0.099, -0.012)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.037</td><td>p = 0.045</td><td>p = 0.018</td></tr>
+    ## <tr><td style="text-align:left">Pregnancy(Yes)</td><td>0.013 (-0.032, 0.059)</td><td>-0.033 (-0.077, 0.012)</td><td></td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.559</td><td>p = 0.153</td><td></td></tr>
+    ## <tr><td style="text-align:left">Nb donations (2 years)</td><td>0.025 (0.006, 0.043)</td><td>-0.002 (-0.023, 0.018)</td><td>0.022 (0.012, 0.033)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.011</td><td>p = 0.851</td><td>p = 0.00003</td></tr>
+    ## <tr><td style="text-align:left">(Nb donations (2 years))²</td><td>-0.004 (-0.012, 0.003)</td><td>0.001 (-0.008, 0.009)</td><td>-0.0002 (-0.003, 0.002)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.241</td><td>p = 0.865</td><td>p = 0.888</td></tr>
+    ## <tr><td style="text-align:left">Days since last donation</td><td>-0.021 (-0.046, 0.004)</td><td>-0.043 (-0.079, -0.005)</td><td>-0.015 (-0.037, 0.008)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.125</td><td>p = 0.029</td><td>p = 0.204</td></tr>
+    ## <tr><td style="text-align:left">iron supplementation</td><td>0.002 (-0.013, 0.018)</td><td>0.005 (-0.016, 0.026)</td><td>0.014 (-0.002, 0.031)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.801</td><td>p = 0.637</td><td>p = 0.094</td></tr>
+    ## <tr><td style="text-align:left">Red meat</td><td>-0.068 (-0.094, -0.040)</td><td>-0.0003 (-0.037, 0.039)</td><td>-0.031 (-0.060, -0.001)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.990</td><td>p = 0.048</td></tr>
+    ## <tr><td style="text-align:left">Vegetables</td><td>-0.020 (-0.076, 0.037)</td><td>-0.001 (-0.065, 0.067)</td><td>-0.015 (-0.058, 0.030)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.470</td><td>p = 0.984</td><td>p = 0.466</td></tr>
+    ## <tr><td style="text-align:left">Fruit and Berries</td><td>0.009 (-0.037, 0.054)</td><td>0.005 (-0.058, 0.068)</td><td>-0.004 (-0.043, 0.033)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.694</td><td>p = 0.871</td><td>p = 0.826</td></tr>
+    ## <tr><td style="text-align:left">Milk</td><td>0.041 (0.014, 0.067)</td><td>0.032 (-0.003, 0.064)</td><td>0.015 (-0.010, 0.040)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.004</td><td>p = 0.073</td><td>p = 0.218</td></tr>
+    ## <tr><td style="text-align:left">Fruit Juices</td><td>-0.003 (-0.030, 0.024)</td><td>0.005 (-0.024, 0.034)</td><td>0.006 (-0.016, 0.027)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.838</td><td>p = 0.702</td><td>p = 0.605</td></tr>
+    ## <tr><td style="text-align:left">Coffee</td><td>-0.035 (-0.055, -0.015)</td><td>-0.010 (-0.042, 0.023)</td><td>-0.010 (-0.030, 0.010)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.0005</td><td>p = 0.527</td><td>p = 0.317</td></tr>
+    ## <tr><td style="text-align:left">Tea</td><td>0.007 (-0.014, 0.029)</td><td>-0.009 (-0.036, 0.016)</td><td>0.001 (-0.018, 0.020)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.511</td><td>p = 0.508</td><td>p = 0.893</td></tr>
+    ## <tr><td style="text-align:left">Beer</td><td>0.002 (-0.034, 0.037)</td><td>-0.022 (-0.064, 0.020)</td><td>-0.014 (-0.039, 0.014)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.906</td><td>p = 0.289</td><td>p = 0.296</td></tr>
+    ## <tr><td style="text-align:left">Wine</td><td>-0.009 (-0.043, 0.025)</td><td>-0.040 (-0.075, -0.005)</td><td>-0.030 (-0.061, -0.001)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.621</td><td>p = 0.036</td><td>p = 0.056</td></tr>
+    ## <tr><td style="text-align:left">Liquor</td><td>0.033 (-0.018, 0.087)</td><td>0.005 (-0.070, 0.085)</td><td>0.003 (-0.036, 0.038)</td></tr>
+    ## <tr><td style="text-align:left"></td><td>p = 0.251</td><td>p = 0.899</td><td>p = 0.881</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Observations</td><td>846</td><td>452</td><td>902</td></tr>
+    ## <tr><td style="text-align:left">R<sup>2</sup></td><td>0.117</td><td>0.059</td><td>0.094</td></tr>
+    ## <tr><td style="text-align:left">Adjusted R<sup>2</sup></td><td>0.097</td><td>0.017</td><td>0.075</td></tr>
+    ## <tr><td style="text-align:left">Residual Std. Error</td><td>0.314 (df = 826)</td><td>0.287 (df = 432)</td><td>0.294 (df = 883)</td></tr>
+    ## <tr><td style="text-align:left">F Statistic</td><td>5.770<sup>***</sup> (df = 19; 826)</td><td>1.417 (df = 19; 432)</td><td>5.061<sup>***</sup> (df = 18; 883)</td></tr>
+    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"><em>Note:</em></td><td colspan="3" style="text-align:right"><sup>*</sup>p<0.1; <sup>**</sup>p<0.05; <sup>***</sup>p<0.01</td></tr>
+    ## </table>
+
 ### Supp Figure 3: Visualizations of the effects of donation history on sTRF
 
-![](index_files/figure-markdown_github/unnamed-chunk-108-1.png)
+``` r
+plt_1 <-blood_data_summary_final %>%
+  dplyr::select(donor, group2, TransferrinR, 
+         TwoYearsFromStartCount_FB) %>% 
+  ggplot(aes(x=TwoYearsFromStartCount_FB, y = TransferrinR)) +
+  geom_hline(data = threshold, aes(yintercept = TransferrinR_thresh), color = "dark red", size = .2) +
+  geom_jitter(aes(color = group2), alpha = 0.25, width = 0.2, size = 0.2, height = 0, shape = 1) +
+  geom_boxplot(aes(color = group2, group = TwoYearsFromStartCount_FB), alpha = 0,
+               width = 0.4,
+               outlier.alpha = 0) +
+  facet_grid(group2~.) +
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c("Pre-menopausal women", "Post-menopausal women","Men" )) +
+  theme_bw() +
+  theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+       panel.border = element_rect(colour = NA),
+        strip.background=element_blank(),
+        strip.text = element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.title.x = element_text(size = 8),
+        axis.title.y =element_text(size = 8),
+        axis.text = element_text(size = 8)) +
+  scale_y_log10() +
+  scale_x_continuous(breaks=c(0, 2, 4,6,8, 10, 12)) +
+  xlab("Nb of donations (2 years)") +
+  ylab("sTfR (mg/l)") 
+
+plt_2 <-blood_data_summary_final %>%
+  dplyr::select(donor, group2, TransferrinR, 
+         DaysToPreviousFB) %>% 
+ ggplot(aes(x=DaysToPreviousFB, y=TransferrinR)) +
+  geom_hline(data = threshold, aes(yintercept = TransferrinR_thresh), color = "dark red", size = .2) +
+  geom_point(aes(color = group2), alpha = 0.4,  size = 0.7, shape =1) +
+  facet_grid(group2~., 
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE))  +
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c("Pre-menopausal women", "Post-menopausal women","Men" )) +
+  theme_bw() +
+ theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 10),
+        axis.line = element_line(colour="black"),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size = 8)) +
+  scale_y_log10() +
+  scale_x_log10(breaks=c(60, 90, 180, 360,1000)) +
+  xlab("Days since last donation") +
+  ylab("")
+
+
+plt_3 <- blood_data_summary_final %>% 
+  mutate(iron_comp_f = case_when(
+    iron_comp_c == 3 ~ "All or almost all",
+    iron_comp_c == 2 ~ "About half",
+    iron_comp_c == 1 ~ "Less than half",
+    iron_comp_c == 0 ~ "None",
+    TRUE ~ "NA"),
+  iron_comp_f = ordered(iron_comp_f, 
+                  levels = c("NA","None", "Less than half",  "About half","All or almost all" ))) %>% 
+  dplyr::select(group2, iron_comp_f, TransferrinR) %>% 
+  ggplot(aes(x = iron_comp_f, y = TransferrinR, color = group2 )) +
+  geom_hline(data = threshold, aes(yintercept = TransferrinR_thresh), color = "dark red", size = .2) +
+  geom_boxplot(outlier.alpha = 0, position = "dodge", width = 0.5) +
+  geom_jitter(width = 0.25, height = 0, shape = 1, size = 0.2, alpha = 0.25) +
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c( "Pre-menopausal women", "Post-menopausal women", "Men" )) +
+  facet_grid(group2~., 
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE)) +
+ theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+       panel.border = element_rect(colour = NA),
+        strip.background=element_blank(),
+        strip.text = element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.text.x=element_text(angle=20,hjust=1),
+        axis.title.x = element_text(size = 8),
+        axis.title.y = element_text(size = 8),
+        axis.text = element_text(size = 8)) +
+  scale_y_log10(breaks=c(5, 15,25,50,100)) +
+  xlab("Iron supplementation")  + 
+  ylab("sTfR (mg/l)") 
+
+plt_4 <- blood_data_summary_final %>% 
+    mutate(red_meat = case_when(red_meat == "never" ~  "Never",
+    red_meat == "less_than_once_weekly" ~ "Less than weekly",
+    red_meat %in% c("1.3_week" , "4.6_week") ~ "Several weekly",
+    TRUE   ~ "Daily or more" ), 
+    red_meat = ordered(red_meat, 
+                  levels = c("Never", "Less than weekly", "Several weekly", "Daily or more" ))) %>% 
+  dplyr::select(group2, red_meat, TransferrinR) %>% 
+  ggplot(aes(x = red_meat, y = TransferrinR, color = group2 )) +
+  geom_hline(data = threshold, aes(yintercept = TransferrinR_thresh), color = "dark red", size = .2) +
+  geom_boxplot(outlier.alpha = 0, position = "dodge", width = 0.5) +
+  geom_jitter(width = 0.25, height = 0, shape = 1, size = 0.2, alpha = 0.3) +
+  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
+                     limits = c( "Pre-menopausal women", "Post-menopausal women", "Men" )) +
+  facet_grid(group2~., 
+      labeller = label_wrap_gen(width = 2, multi_line = TRUE)) +
+ theme(legend.position = "none", 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.border = element_rect(colour = NA),
+        strip.background=element_rect(colour="white",fill="white"),
+        strip.text = element_text(face="bold", size = 10),
+        axis.line = element_line(colour="black"),
+        axis.text.x=element_text(angle=20,hjust=1),
+        axis.title.x =  element_text(size = 8),
+       axis.title.y =  element_blank(),
+        axis.text = element_text(size = 8)) +
+  scale_y_log10() +
+  xlab("Red meat") 
+
+plt2 <- cowplot::plot_grid(plt_1, plt_2, plt_3, plt_4,  ncol = 2)
+
+plt2
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-107-1.png)
+
+``` r
+cowplot::save_plot("../results/figures/Supp_Figure_3_sTFR.png",plt2, base_height = NULL,
+          base_aspect_ratio = .5, base_width = 11.5 * .394 ) # make room for figure legend
+```
 
 Self-assessed health
 ====================
@@ -16383,56 +10741,296 @@ Self-assessed health
 Self-assessed health was measured using the following question:
 
 -   How is your health in general?
+
 -   Poor, satisfactory, good, very good, excellent
 
-We use ordinal logistic regression analysis (<span class="citeproc-not-found" data-reference-id="Bender1997">**???**</span>) to analyze the relationship between self-assessed health and ferritin. We test whether Ferritin level is a significant predictor of self-assessed health when controlling for age, BMI, CRP, number of donations in the last two years, and physical activity. We run both a frequentist analysis and a Bayesian analysis. Results from the frequentist analysis suggest that Ferritin is not a significant predictor of self-perceived health in blood donors. According to the Bayesian analysis, the data dees not provide strong evidence in favor of ferritin co-varying with self-perceived health.
+We use ordinal logistic regression analysis (Bender and Grouven 1997) to analyze the relationship between self-assessed health and ferritin. We test whether Ferritin level is a significant predictor of self-assessed health when controlling for age, BMI, CRP, number of donations in the last two years, and physical activity. We run both a frequentist analysis and a Bayesian analysis. Results from the frequentist analysis suggest that Ferritin is not a significant predictor of self-perceived health in blood donors. According to the Bayesian analysis, the data dees not provide strong evidence in favor of ferritin co-varying with self-perceived health.
 
 Supplementary Figure 4
 ----------------------
 
 We first display the distribution of answers to the self-reported health question.
 
-![](index_files/figure-markdown_github/unnamed-chunk-109-1.png)
+``` r
+plt1 <- blood_data_summary_final %>% 
+  dplyr::select(donor, group, self_perceived_health) %>% 
+ mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", as.character(self_perceived_health)),
+         self_perceived_health = ordered(self_perceived_health, levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
+  mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal \n women",
+         group == "Post_menopause_women" ~ "Post-menopausal \n women",
+         TRUE ~ "Men"),
+         group = ordered(group, levels = c("Pre-menopausal \n women", "Post-menopausal \n women", "Men"))) %>% 
+  group_by(group, self_perceived_health  ) %>% 
+  summarise( N = n()) %>% 
+  ungroup() %>% 
+  group_by(group) %>% 
+  mutate(proportion = round(N / sum(N), 2)) %>% 
+  ggplot(aes(x = self_perceived_health, y = proportion, fill = group)) +
+  # geom_jitter(alpha = 0.5, color = "light blue", shape = 1) +
+  geom_col( color = "grey") + 
+  geom_text(aes(label=round(proportion,2)), 
+            position=position_dodge(width=0.9), 
+            vjust=-0.5,
+            size = 2) +
+  facet_wrap( ~ group) +
+  xlab("Question") +
+  labs(y = "Proportion of donors") +
+  scale_fill_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
+                     limits = c( "Men",  "Post-menopausal \n women", "Pre-menopausal \n women" )) +
+  scale_y_continuous(breaks = c(0, 0.1, 0.2, 0.3,  0.4, 0.5)) +
+  xlab("How is your health in general?") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 9, angle = 30, vjust = .75),
+        strip.background = element_blank(),
+        axis.title.x = element_text(size = 10),
+        axis.title.y =element_text(size = 10),
+        axis.text = element_text(size = 8),
+        strip.text = element_text(size = 8)) 
+
+plt1
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-108-1.png)
+
+``` r
+ggplot2::ggsave("../results/figures/supp_figure_4_health.png", plt1,  height = 6.5 * 1.25, width = 10 * 1.25, units = "cm", dpi = 300 )
+```
 
 Figure 4 - Relationship between ferritin and self-reported health
 -----------------------------------------------------------------
 
-![](index_files/figure-markdown_github/unnamed-chunk-110-1.png)
+``` r
+plt <- blood_data_summary_final %>%
+  mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", as.character(self_perceived_health)),
+         self_perceived_health = ordered(self_perceived_health, levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
+  mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal \n women",
+         group == "Post_menopause_women" ~ "Post-menopausal \n women",
+         TRUE ~ "Men"),
+         group = ordered(group, levels = c("Pre-menopausal \n women", "Post-menopausal \n women", "Men"))) %>% 
+  ggplot(aes(x = self_perceived_health, y = Ferritin, color = group)) +
+  geom_hline(yintercept = 15, 
+             color = "dark red", 
+             size = .2,
+             linetype = 2) +
+  geom_boxplot(outlier.alpha = 0, 
+               alpha = 0,
+               size = 0.3,
+               width = 0.5) +
+  geom_jitter(alpha = 0.3, 
+              shape = 1, 
+              size = 0.15,
+              position = position_jitterdodge(jitter.height = 0, 
+                                              jitter.width = 0.5 )) +
+   scale_color_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
+                     limits = c( "Men",  "Post-menopausal \n women", "Pre-menopausal \n women" )) +
+  facet_grid(group ~ .) +
+  xlab("How is your health in general?") +
+    ylab(expression("Ferritin ("*mu* "g/l)")) +
+  scale_y_log10(breaks = c(5,15,25,50,100)) +
+    theme_bw() +
+  theme(legend.position = "none",
+        legend.title = element_blank(),
+        legend.background = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+       panel.border = element_rect(colour = NA),
+        strip.background=element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.title.x = element_text(size = 10),
+        axis.title.y =element_text(size = 10),
+        axis.text = element_text(size = 8)) 
+
+
+plt
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-109-1.png)
+
+``` r
+ggplot2::ggsave("../results/figures/figure_4_health.png", plt,  height = 8.5 * 1.25, width = 6.38 * 1.25, units = "cm", dpi = 300 )
+```
 
 Ordinal regression analysis
 ---------------------------
 
 To analyze the answers to the self-assessed health question properly, we use an ordinal proportional odds model or ordinal logistic model. This type of model is used to model outome variables that are ordered and represent an unknown latent variable. Here self-reported health is the ordered outcome variable we are trying to predict. Additional information about ordinal models in epidemiology can be found in (Abreu, Siqueira, and Caiaffa 2009). Because there are few donors who reported only satisfactory health, we pool together the data from pre-menopausal and post-menopausal women into a single women's group.
 
-An example of how to interpret the odds-ratio that are computed from the regression coefficients can be found [https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=9&cad=rja&uact=8&ved=2ahUKEwjg1PO9g\_TcAhVhD5oKHSt1BVYQFjAIegQIABAC&url=http%3A%2F%2Fweb.pdx.edu%2F~newsomj%2Fcdaclass%2Fho\_ordinal%2520regression.pdf&usg=AOvVaw2NRuZfLiLnX4bUfqOPVUne](here). The main assumption of the method is a proportional odds assumption which is explained here. Other good summary off main assupmtions of the method. [http://www.karlin.mff.cuni.cz/~pesta/NMFM404/ordinal.html\#Ordered\_logistic\_regression](here).
+An example of how to interpret the odds-ratio that are computed from the regression coefficients can be found here [here](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=9&cad=rja&uact=8&ved=2ahUKEwjg1PO9g_TcAhVhD5oKHSt1BVYQFjAIegQIABAC&url=http%3A%2F%2Fweb.pdx.edu%2F~newsomj%2Fcdaclass%2Fho_ordinal%2520regression.pdf&usg=AOvVaw2NRuZfLiLnX4bUfqOPVUne).
 
-We transform Ferritin into *l**o**g**F**e**r**r**i**t**i**n* = *l**n*(*F**e**r**r**i**t**i**n*)/*l**n*(2). With this transformation, an increase in one unit in logFerritin is equivalent to a doubling of Ferritin values. We also center and scale all variables. We also divide age by 5, so a unit increase in the age factor is actually an increase in 5 years in age. We center the data but do not scale it in order to make the coeffs easier to interpret.
+We transform Ferritin into *logFerritin = ln(Ferritin)/ln(2)*. With this transformation, an increase in one unit in logFerritin is equivalent to a doubling of Ferritin values. We also center and scale all variables. We also divide age by 5, so a unit increase in the age factor is actually an increase in 5 years in age. We center the data but do not scale it in order to make the coeffs easier to interpret.
 
 ### Ordinality of predictors
 
 We must first check that a majority of our explanatory variables do in fact have an ordinal relationship to the outcome variable. It seems to be mosty the case.
 
-![](index_files/figure-markdown_github/unnamed-chunk-111-1.png)
+``` r
+blood_data_summary_reg %>%
+  dplyr::select(donor,  group, self_perceived_health, age, BMI, don_ct) %>% 
+  gather(key = measure, value = value, -donor, -group, -self_perceived_health) %>% 
+    mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", as.character(self_perceived_health)),
+         self_perceived_health = ordered(self_perceived_health, levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
+    mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal \n women",
+         group == "Post_menopause_women" ~ "Post-menopausal \n women",
+         TRUE ~ "Men"),
+         measure = ifelse(measure == "don_ct", "Nb of \n donations", measure)) %>% 
+  ggplot(aes(x = self_perceived_health, y = value, color = group)) +
+  geom_boxplot(outlier.alpha = 0, alpha = 0) +
+  geom_jitter(alpha = 0.2, 
+              shape = 1, 
+              size = 0.5,
+              position = position_jitterdodge(jitter.height = 0, jitter.width = 0.5)) +
+  facet_grid(measure ~ group, scales = "free_y") +
+  theme(axis.text.x = element_text(angle = 30, vjust = 0.65)) +
+  scale_color_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
+                     limits = c( "Men",  "Post-menopausal \n women", "Pre-menopausal \n women" )) +
+  xlab("How is your health in general?") +
+   theme(legend.position = "none",
+        legend.title = element_blank(),
+        legend.background = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+       panel.border = element_rect(colour = NA),
+        strip.background=element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.title.x = element_text(size = 12),
+        axis.title.y =element_blank(),
+        axis.text = element_text(size = 8)) 
+```
 
-![](index_files/figure-markdown_github/unnamed-chunk-112-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-110-1.png)
+
+``` r
+blood_data_summary_reg %>%
+  dplyr::select(donor,  group, self_perceived_health,  physical_act_daily_n, physical_act_freq_n) %>% 
+  gather(key = measure, value = value, -donor, -group, -self_perceived_health) %>% 
+  mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", as.character(self_perceived_health)),
+         self_perceived_health = ordered(self_perceived_health, levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
+  mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal \n women",
+         group == "Post_menopause_women" ~ "Post-menopausal \n women",
+         TRUE ~ "Men")) %>% 
+  mutate(measure = ifelse(measure == "physical_act_daily_n", "Physical activity \n Daily amount", "Physical activity \n Frequency")) %>%
+  ggplot(aes(x = self_perceived_health, y = value, color = group)) +
+  geom_boxplot(outlier.alpha = 0, alpha = 0) +
+  geom_jitter(alpha = 0.2, shape = 1, 
+              size = 0.3,
+              position = position_jitterdodge(jitter.height = 0.2, jitter.width = 0.5)) +
+  facet_grid(measure ~ group, scales = "free_y") +
+  theme(axis.text.x = element_text(angle = 30, vjust = 0.65)) +
+  scale_color_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
+                     limits = c( "Men",  "Post-menopausal \n women", "Pre-menopausal \n women" )) +
+  xlab("How is your health in general?") +
+   theme(legend.position = "none",
+        legend.title = element_blank(),
+        legend.background = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+       panel.border = element_rect(colour = NA),
+        strip.background=element_blank(),
+        axis.line = element_line(colour="black"),
+        axis.title.x = element_text(size = 12),
+        axis.title.y =element_blank(),
+        axis.text = element_text(size = 8)) 
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-111-1.png)
 
 ### Women
 
+``` r
+ordinal_data_temp <-
+  blood_data_summary_reg %>% 
+  filter(group != "Men") %>% 
+  mutate(menopausal_status = ifelse(group == "Pre_menopause_women", 0, 1) ) %>% 
+  mutate(age = age/5) %>% 
+  dplyr::select(self_perceived_health, menopausal_status,  age,  BMI, log_CRP, don_ct, log_last_don,  Ferritin, TransferrinR, smoking, physical_act_daily_n,  physical_act_freq_n) %>% 
+  rename(sTfR = TransferrinR) %>% 
+  mutate(log_Ferritin = log(Ferritin)/log(2),
+         age = scale(age, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         log_last_don = scale(log_last_don, scale = FALSE)[,1],
+         don_ct = scale(don_ct, scale = FALSE)[,1],
+         log_Ferritin = scale(log_Ferritin, scale = FALSE)[,1],
+          sTfR = scale(sTfR, scale = FALSE)[,1],
+         smoking = as.numeric(smoking) - 1)
+```
+
 #### Correlograms
 
-![](index_files/figure-markdown_github/unnamed-chunk-114-1.png)
+``` r
+ggpairs(ordinal_data_temp, 
+        columns = c("self_perceived_health", "age", "log_CRP",  "BMI", "don_ct", "log_Ferritin"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-113-1.png)
 
 #### Frequentist fit
 
 ##### Assumption checks
 
-The following plot is a visual tool to estimate if the proportional odds assumption is met. For each predictor variable, the assumption is met if the distance between the cross marker and the triangle marker is similar for all levels of the predictor variable. This method is detailed in (Harrell 2015) as well as [https://stats.idre.ucla.edu/r/dae/ordinal-logistic-regression/](here).
+The following plot is a visual tool to estimate if the proportional odds assumption is met. For each predictor variable, the assumption is met if the distance between the cross marker and the triangle marker is similar for all levels of the predictor variable. This method is detailed in (Harrell 2015) as well as [here](ttps://stats.idre.ucla.edu/r/dae/ordinal-logistic-regression/).
 
-![](index_files/figure-markdown_github/unnamed-chunk-115-1.png)
+``` r
+X5_num <- as.integer(ordinal_data_temp$self_perceived_health)
+
+sf <- function(y)
+  c('Y>1' = qlogis(mean(y>1)),
+    'Y>2' = qlogis(mean(y>2)),
+    'Y>3' = qlogis(mean(y>3)))
+
+s <- summary(X5_num ~ menopausal_status + age + BMI + log_CRP + don_ct  + log_last_don  + smoking +  physical_act_freq_n +  physical_act_daily_n + log_Ferritin,
+             fun = sf, 
+             data = ordinal_data_temp)
+
+s[, 4] <- s[, 4] - s[, 3]
+s[, 3] <- s[, 3] - s[, 3]
+
+plot(s, which=1:3, pch=1:3, xlab='logit', main=' ', xlim=range(s[,3:4]))
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-114-1.png)
 
 ##### Ordinal regression
 
 We fit the data using the rms R package.
+
+``` r
+ordinal_data_temp <-
+ ordinal_data_temp %>%
+  mutate(smoking = as.numeric(smoking)-1)
+
+dd <- datadist(ordinal_data_temp) 
+options(datadist="dd")
+
+
+fit_women <- lrm(self_perceived_health ~ menopausal_status + age +  BMI + log_CRP + smoking +  don_ct + log_last_don  +
+             physical_act_daily_n + physical_act_freq_n  + log_Ferritin, 
+           data = ordinal_data_temp,
+              x = TRUE, y = TRUE)
+```
+
+``` r
+stargazer(fit_women,  
+           title = "Women",
+          intercept.bottom = FALSE,
+          type = "html",
+          single.row = TRUE,
+          ci = TRUE,
+          omit = "Constant",
+          header = FALSE,
+          report = "vcsp",
+          covariate.labels = c("Health > Good","Health > Very good", " Health > Excellent", "Menopausal status",
+                               "age", "BMI", "CRP (log)", "Smoking(yes)",
+                               "Nb donations (2 years)", "Nb of days since last donation (log)", 
+                                "Daily Physical Activity", "Physical activity frequency", "ln(Ferritin)/ln(2)"),
+          dep.var.caption   = "Self-rated health", 
+          dep.var.labels.include = FALSE,
+          # column.labels = c("All observations", "Influential removed"),
+          star.cutoffs = c(0.05, 0.01, 0.001))
+```
 
 <table style="text-align:center">
 <caption>
@@ -16699,6 +11297,23 @@ Our model significantly predicts self-rated health (Pr(&gt; chi2) &lt;0.0001), b
 
 We now transform the regression coefficients into odds-ratios for easier interpretation of results.
 
+``` r
+brm_coeffs <- tibble(Regressor = names(coef(fit_women)), Coefficient = coef(fit_women)) %>% 
+  mutate(Odds.Ratio = exp(Coefficient))
+
+brm_coeffs %>% 
+   filter(!(Regressor %in% c("y>=Good", "y>=Very_good", "y>=Excellent"))) %>% 
+  mutate(Regressor = dplyr::recode(Regressor, age = "Age",
+                               log_CRP = "CRP",
+                               smoking = "Smoking",
+                               don_ct = "Nb of donations (2 years)",
+                               log_last_don = "Days since last donation",
+                               physical_act_daily_n = "Daily physical activity",
+                               physical_act_freq_n = "Exercise frequency",
+                               log_Ferritin = "Ferritin")) %>% 
+    kable()
+```
+
 <table>
 <thead>
 <tr>
@@ -16834,27 +11449,373 @@ Once BMI, age, CRP, donation activity, smoking and physical activity are control
 
 We use a bootstrap to estimate 95% BCa confidence intervals on the coefficients.
 
+``` r
+set.seed(5874)
+
+output_file_distrib = ("../results/bootstraps/health_coeff_boot_object_std_seed_5874_women.rdata")
+output_file_Bca = ("../results/bootstraps/health_coeff_boot_std_Bca_seed_5874_women.rdata")
+# 
+
+get_from_file = TRUE
+
+if(get_from_file){
+  load(output_file_distrib)
+}else{
+  seed_curr <- .Random.seed
+
+  boot_object <- rms::bootcov(fit = fit_women, B = 10000, coef.reps = TRUE)
+
+  save(boot_object, file = output_file_distrib)
+}
+
+
+if(get_from_file){
+  load(output_file_Bca)
+}else{
+  conf_int_coeffs <- bootBCa(boot_object$boot.coef, 
+        boot_object$boot.Coef, 
+        type = 'bca', 
+        n = boot_object$stats[[1]], 
+        seed = seed_curr, 
+        conf.int = 0.95)
+
+  save(conf_int_coeffs, file = output_file_Bca)
+}
+```
+
+``` r
+ordinal_regression_coefficients <- 
+  as.data.frame(boot_object$coefficients) %>% 
+  rownames_to_column() %>%
+  filter(!rowname %in% c("y>=Good", "y>=Very_good", "y>=Excellent" )) 
+
+names(ordinal_regression_coefficients) <- c("regressor", "coefficient")
+
+conf_int_coeffs <- as.data.frame(conf_int_coeffs) 
+names(conf_int_coeffs) <- names(boot_object$coefficients) 
+
+ordinal_regression_coefficients_women <- 
+  conf_int_coeffs %>% 
+    rownames_to_column() %>% 
+    gather(key = regressor, value = coefficient, -rowname) %>% 
+    filter(!regressor %in% c("y>=Good", "y>=Very_good", "y>=Excellent" ) ) %>%
+    rename(conf_int = rowname) %>% 
+    spread(key = conf_int, value = coefficient) %>% 
+    full_join(ordinal_regression_coefficients, by = "regressor") 
+
+ordinal_regression_coefficients_women <-
+  ordinal_regression_coefficients_women %>% 
+    gather(key = key, value = value, -regressor) %>% 
+    mutate(value = exp(value),
+           key = paste(key, "OR", sep = "_")) %>% 
+    spread(key = key, value =  value) %>% 
+    full_join(ordinal_regression_coefficients_women, by = "regressor") %>% 
+    mutate(sex = "Women",
+         method = "GLM")
+```
+
+``` r
+## create list for stargazer table
+
+CI_regression_health = list(2)
+regress_coeff_health = list(2)
+
+CI_regression_health[[1]] <- t(as.matrix(exp(conf_int_coeffs)))
+regress_coeff_health[[1]] <- exp(boot_object$coefficients)
+```
+
 #### Ordinal model Bayesian fit
 
 We use brms to run a bayesian fit of the same regression model. We compute LOO to show that adding ferritin does not improve the regression model.
 
-##### Model fit
+``` r
+ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status + age +  BMI + log_CRP + smoking +  don_ct + log_last_don  +
+             physical_act_daily_n + physical_act_freq_n  + log_Ferritin,  
+                   data = ordinal_data_temp,
+                   family = cumulative,
+                   save_all_pars = TRUE)
+```
+
+    ## Compiling the C++ model
+
+    ## Start sampling
+
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 1).
+    ## Chain 1: 
+    ## Chain 1: Gradient evaluation took 0.000739 seconds
+    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 7.39 seconds.
+    ## Chain 1: Adjust your expectations accordingly!
+    ## Chain 1: 
+    ## Chain 1: 
+    ## Chain 1: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 1: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 1: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 1: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 1: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 1: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 1: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 1: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 1: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 1: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 1: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 1: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 1: 
+    ## Chain 1:  Elapsed Time: 13.4942 seconds (Warm-up)
+    ## Chain 1:                12.4309 seconds (Sampling)
+    ## Chain 1:                25.9251 seconds (Total)
+    ## Chain 1: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 2).
+    ## Chain 2: 
+    ## Chain 2: Gradient evaluation took 0.000505 seconds
+    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 5.05 seconds.
+    ## Chain 2: Adjust your expectations accordingly!
+    ## Chain 2: 
+    ## Chain 2: 
+    ## Chain 2: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 2: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 2: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 2: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 2: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 2: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 2: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 2: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 2: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 2: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 2: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 2: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 2: 
+    ## Chain 2:  Elapsed Time: 13.0834 seconds (Warm-up)
+    ## Chain 2:                14.2683 seconds (Sampling)
+    ## Chain 2:                27.3517 seconds (Total)
+    ## Chain 2: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 3).
+    ## Chain 3: 
+    ## Chain 3: Gradient evaluation took 0.000536 seconds
+    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 5.36 seconds.
+    ## Chain 3: Adjust your expectations accordingly!
+    ## Chain 3: 
+    ## Chain 3: 
+    ## Chain 3: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 3: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 3: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 3: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 3: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 3: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 3: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 3: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 3: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 3: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 3: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 3: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 3: 
+    ## Chain 3:  Elapsed Time: 12.3486 seconds (Warm-up)
+    ## Chain 3:                13.2491 seconds (Sampling)
+    ## Chain 3:                25.5977 seconds (Total)
+    ## Chain 3: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 4).
+    ## Chain 4: 
+    ## Chain 4: Gradient evaluation took 0.000523 seconds
+    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 5.23 seconds.
+    ## Chain 4: Adjust your expectations accordingly!
+    ## Chain 4: 
+    ## Chain 4: 
+    ## Chain 4: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 4: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 4: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 4: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 4: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 4: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 4: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 4: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 4: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 4: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 4: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 4: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 4: 
+    ## Chain 4:  Elapsed Time: 13.8073 seconds (Warm-up)
+    ## Chain 4:                10.1704 seconds (Sampling)
+    ## Chain 4:                23.9778 seconds (Total)
+    ## Chain 4:
+
+``` r
+bayes_regression_coeffs_women <- 
+  tidy(ordinal_fit_B_women) %>% 
+  dplyr::select(-std.error) %>% 
+   dplyr::filter(!term %in% c("b_Intercept[1]", "b_Intercept[2]", "b_Intercept[3]","lp__",
+                            "temp_Intercept[1]", "temp_Intercept[2]", "temp_Intercept[3]" )) %>%
+  mutate(term = str_remove(term, "b_")) %>% 
+  rename(regressor = term, coefficient = estimate, 
+         Lower = lower, Upper = upper)
+
+bayes_regression_coeffs_women <-
+   bayes_regression_coeffs_women %>% 
+    gather(key = key, value = value, -regressor) %>% 
+    mutate(value = exp(value),
+           key = paste(key, "OR", sep = "_")) %>% 
+    spread(key = key, value =  value) %>% 
+    full_join(bayes_regression_coeffs_women, by = "regressor") %>% 
+   mutate(sex = "Women",
+         method = "Bayes") %>%    
+    mutate(regressor = ifelse(regressor == "smokingyes", "smoking_yes", regressor )) 
+```
 
 ##### Model diagnostics
 
 ###### Posterior probability check
 
-![](index_files/figure-markdown_github/unnamed-chunk-124-1.png)
+``` r
+pp_check(ordinal_fit_B_women)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-123-1.png)
 
 ###### Diagnostics of the MCMC sampling
 
-![](index_files/figure-markdown_github/unnamed-chunk-125-1.png)![](index_files/figure-markdown_github/unnamed-chunk-125-2.png)![](index_files/figure-markdown_github/unnamed-chunk-125-3.png)![](index_files/figure-markdown_github/unnamed-chunk-125-4.png)
+``` r
+stan_trace(ordinal_fit_B_women$fit)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-124-1.png)
+
+``` r
+# raftery.diag(data.brms)
+stan_ac(ordinal_fit_B_women$fit)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-124-2.png)
+
+``` r
+stan_rhat(ordinal_fit_B_women$fit)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-124-3.png)
+
+``` r
+stan_ess(ordinal_fit_B_women$fit)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-124-4.png)
 
 ##### Model comparison
 
-Model comparison using Bayes Factors in non trivial when using ordinal models. We use LOO (leave-One-OUt cross validation) as is shown [https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/](here). (Vehtari, Gelman, and Gabry 2017) would be the main reference.
+Model comparison using Bayes Factors in non trivial when using ordinal models. We use LOO (leave-One-OUt cross validation) as is shown [here](https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/). (Vehtari, Gelman, and Gabry 2017) is the main reference. We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor.
 
-We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor.
+``` r
+ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_status + age + BMI +  log_CRP + smoking + don_ct   +
+                                 log_last_don + physical_act_daily_n + physical_act_freq_n ,
+                   data = ordinal_data_temp,
+                   family = cumulative,
+                   save_all_pars = TRUE)
+```
+
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 1).
+    ## Chain 1: 
+    ## Chain 1: Gradient evaluation took 0.000671 seconds
+    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 6.71 seconds.
+    ## Chain 1: Adjust your expectations accordingly!
+    ## Chain 1: 
+    ## Chain 1: 
+    ## Chain 1: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 1: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 1: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 1: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 1: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 1: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 1: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 1: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 1: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 1: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 1: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 1: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 1: 
+    ## Chain 1:  Elapsed Time: 13.52 seconds (Warm-up)
+    ## Chain 1:                12.4809 seconds (Sampling)
+    ## Chain 1:                26.0009 seconds (Total)
+    ## Chain 1: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 2).
+    ## Chain 2: 
+    ## Chain 2: Gradient evaluation took 0.000411 seconds
+    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 4.11 seconds.
+    ## Chain 2: Adjust your expectations accordingly!
+    ## Chain 2: 
+    ## Chain 2: 
+    ## Chain 2: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 2: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 2: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 2: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 2: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 2: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 2: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 2: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 2: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 2: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 2: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 2: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 2: 
+    ## Chain 2:  Elapsed Time: 13.1536 seconds (Warm-up)
+    ## Chain 2:                11.3368 seconds (Sampling)
+    ## Chain 2:                24.4904 seconds (Total)
+    ## Chain 2: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 3).
+    ## Chain 3: 
+    ## Chain 3: Gradient evaluation took 0.000566 seconds
+    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 5.66 seconds.
+    ## Chain 3: Adjust your expectations accordingly!
+    ## Chain 3: 
+    ## Chain 3: 
+    ## Chain 3: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 3: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 3: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 3: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 3: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 3: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 3: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 3: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 3: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 3: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 3: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 3: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 3: 
+    ## Chain 3:  Elapsed Time: 12.1565 seconds (Warm-up)
+    ## Chain 3:                13.1673 seconds (Sampling)
+    ## Chain 3:                25.3238 seconds (Total)
+    ## Chain 3: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 4).
+    ## Chain 4: 
+    ## Chain 4: Gradient evaluation took 0.000552 seconds
+    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 5.52 seconds.
+    ## Chain 4: Adjust your expectations accordingly!
+    ## Chain 4: 
+    ## Chain 4: 
+    ## Chain 4: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 4: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 4: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 4: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 4: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 4: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 4: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 4: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 4: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 4: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 4: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 4: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 4: 
+    ## Chain 4:  Elapsed Time: 13.505 seconds (Warm-up)
+    ## Chain 4:                12.0708 seconds (Sampling)
+    ## Chain 4:                25.5758 seconds (Total)
+    ## Chain 4:
+
+``` r
+LOO(ordinal_fit_restricted, ordinal_fit_B_women) 
+```
 
     ##                                                LOOIC    SE
     ## ordinal_fit_restricted                       2676.89 43.25
@@ -16865,21 +11826,98 @@ The LOO comparison suggests that the full model does not fit the data any better
 
 ### Men
 
+``` r
+ordinal_data_temp <-
+  blood_data_summary_reg %>% 
+  filter(group == "Men") %>% 
+  mutate(age = age/5) %>% 
+  dplyr::select(self_perceived_health,  age,  BMI, log_CRP, don_ct, log_last_don,  Ferritin, smoking, 
+                physical_act_daily_n,  physical_act_freq_n) %>% 
+  mutate(log_Ferritin = log(Ferritin)/log(2),
+         age = scale(age, scale = FALSE)[,1],
+         BMI = scale(BMI, scale = FALSE)[,1],
+         log_CRP = scale(log_CRP, scale = FALSE)[,1],
+         log_last_don = scale(log_last_don, scale = FALSE)[,1],
+         don_ct = scale(don_ct, scale = FALSE)[,1],
+         log_Ferritin = scale(log_Ferritin, scale = FALSE)[,1],
+         smoking = as.numeric(smoking) - 1)
+```
+
 #### Correlograms
 
-The only strong collinearity is, as expected and known from the previous analyses, between log\_Ferritin and don\_ct (Nb of donations in the previous two years).
+``` r
+ggpairs(ordinal_data_temp, 
+        columns = c("self_perceived_health", "age", "log_CRP",  "BMI", "don_ct", "log_Ferritin"),
+         lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
+                      combo = wrap("facethist", binwidth = 0.5)),
+        progress = FALSE)
+```
 
-![](index_files/figure-markdown_github/unnamed-chunk-129-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-128-1.png)
 
 #### Frequentist fit
 
 ##### Assumption checks
 
-![](index_files/figure-markdown_github/unnamed-chunk-130-1.png)
+``` r
+X5_num <- as.integer(ordinal_data_temp$self_perceived_health)
 
-##### Ordinal regression fit (rms package)
+sf <- function(y)
+  c('Y>1' = qlogis(mean(y>1)),
+    'Y>2' = qlogis(mean(y>2)),
+    'Y>3' = qlogis(mean(y>3)))
 
-We fit the data using the rms R package.
+s <- summary(X5_num ~ age + BMI + log_CRP + don_ct + log_last_don + log_Ferritin + smoking +  
+               physical_act_freq_n +  physical_act_daily_n,
+             fun = sf, 
+             data = ordinal_data_temp)
+
+s[, 4] <- s[, 4] - s[, 3]
+s[, 3] <- s[, 3] - s[, 3]
+s[, 2] <- s[, 3] - s[, 2]
+
+
+plot(s, which=1:3, pch=1:3, xlab='logit', main=' ', xlim=range(s[,2:4]))
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-129-1.png)
+
+##### Ordinal regression fit
+
+``` r
+ordinal_data_temp <-
+ ordinal_data_temp %>%
+  mutate(smoking = as.numeric(smoking)-1)
+
+dd <- datadist(ordinal_data_temp) 
+options(datadist="dd")
+options(contrasts=c("contr.treatment", "contr.treatment"))
+
+fit_men <- lrm(self_perceived_health ~  age +  BMI + log_CRP + smoking +  don_ct + log_last_don + 
+             physical_act_daily_n + physical_act_freq_n  + log_Ferritin  , 
+           data = ordinal_data_temp,
+              x = TRUE, y = TRUE)
+```
+
+``` r
+stargazer(fit_men,  
+           title = "Men",
+          intercept.bottom = FALSE,
+          type = "html",
+          single.row = TRUE,
+          ci = TRUE,
+          omit = "Constant",
+          header = FALSE,
+          report = "vcsp",
+          covariate.labels = c("Health > Good","Health > Very Good", "Health > Excellent",
+                               "age", "BMI", "CRP (log)", "Smoking(yes)",
+                               "Nb donations (2 years)", "Nb of days since last donation (log)", 
+                                "Daily Physical Activity", "Physical activity frequency", "ln(Ferritin)/ln(2)"),
+           dep.var.caption   = "Self-rated health", 
+          dep.var.labels.include = FALSE,
+          # column.labels = c("All observations", "Influential removed"),
+          star.cutoffs = c(0.05, 0.01, 0.001))
+```
 
 <table style="text-align:center">
 <caption>
@@ -17131,6 +12169,23 @@ Our model significantly predicts self-rated health (Pr(&gt; chi2) &lt;0.0001), b
 
 We can now transform the regression coefficients into odds-ratios for easier interpretation of results.
 
+``` r
+brm_coeffs <- tibble(Regressor = names(coef(fit_men)), Coefficient = coef(fit_men)) %>% 
+  mutate(Odds.Ratio = exp(Coefficient))
+
+brm_coeffs %>% 
+   filter(!(Regressor %in% c("y>=Good", "y>=Very_good", "y>=Excellent"))) %>% 
+  mutate(Regressor = dplyr::recode(Regressor, age = "Age",
+                               log_CRP = "CRP",
+                               smoking = "Smoking",
+                               don_ct = "Nb of donations (2 years)",
+                               log_last_don = "Days since last donation",
+                               physical_act_daily_n = "Daily physical activity",
+                               physical_act_freq_n = "Exercise frequency",
+                               log_Ferritin = "Ferritin")) %>% 
+    kable()
+```
+
 <table>
 <thead>
 <tr>
@@ -17247,41 +12302,106 @@ Ferritin
 </tr>
 </tbody>
 </table>
-Results show that an increase in 1 point of BMI age results in a 6.7 % decrease in your odds by of feeling in very good pr excellent compared to satisfactory or good. An increase in one scale point in exercise frequency results in an increase of 44% of your odds of felling in excellent health compared to very good, good or satisfactory health.
+Results show that an increase in 1 point of BMI age results in a 6.6 % decrease in your odds by of feeling in very good pr excellent compared to satisfactory or good. An increase in one scale point in exercise frequency results in an increase of 44.1% of your odds of felling in excellent health compared to very good, good or satisfactory health.
 
-Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a 5.8 % increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
+Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a 5.8% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
 
 ##### Bootstrapped CIs
 
 We use a bootstrap to estimate confidence intervals on the coefficients for proper reporting of results.
 
+``` r
+set.seed(5874)
+
+output_file_distrib = ("../results/bootstraps/health_coeff_boot_object_std_seed_5874_men.rdata")
+output_file_Bca = ("../results/bootstraps/health_coeff_boot_std_Bca_seed_5874_men.rdata")
+
+get_from_file = TRUE
+
+if(get_from_file){
+  load(output_file_distrib)
+}else{
+  seed_curr <- .Random.seed
+
+  boot_object <- rms::bootcov(fit = fit_men, B = 10000, coef.reps = TRUE)
+
+  save(boot_object, file = output_file_distrib)
+}
+
+
+if(get_from_file){
+  load(output_file_Bca)
+}else{
+  conf_int_coeffs <- bootBCa(boot_object$boot.coef, 
+        boot_object$boot.Coef, 
+        type = 'bca', 
+        n = boot_object$stats[[1]], 
+        seed = seed_curr, 
+        conf.int = 0.95)
+
+  save(conf_int_coeffs, file = output_file_Bca)
+}
+```
+
+``` r
+ordinal_regression_coefficients <- 
+  as.data.frame(boot_object$coefficients) %>% 
+  rownames_to_column() %>%
+  filter(!rowname %in% c("y>=Good", "y>=Very_good", "y>=Excellent" )) 
+
+names(ordinal_regression_coefficients) <- c("regressor", "coefficient")
+
+conf_int_coeffs <- as.data.frame(conf_int_coeffs) 
+names(conf_int_coeffs) <- names(boot_object$coefficients) 
+
+ordinal_regression_coefficients_men <- 
+  conf_int_coeffs %>% 
+    rownames_to_column() %>% 
+    gather(key = regressor, value = coefficient, -rowname) %>% 
+    filter(!regressor %in% c("y>=Good", "y>=Very_good", "y>=Excellent" ) ) %>% 
+    # mutate(regressor = ifelse(regressor == "smoking=yes", "smoking_yes", regressor )) %>% 
+    rename(conf_int = rowname) %>% 
+    spread(key = conf_int, value = coefficient) %>% 
+    full_join(ordinal_regression_coefficients, by = "regressor") 
+
+ordinal_regression_coefficients_men <-
+  ordinal_regression_coefficients_men %>% 
+    gather(key = key, value = value, -regressor) %>% 
+    mutate(value = exp(value),
+           key = paste(key, "OR", sep = "_")) %>% 
+    spread(key = key, value =  value) %>% 
+    full_join(ordinal_regression_coefficients_men, by = "regressor") %>% 
+    mutate(sex = "Men",
+         method = "GLM")
+```
+
+``` r
+## create list for stargazer table
+CI_regression_health[[2]] <- t(as.matrix(exp(conf_int_coeffs)))
+regress_coeff_health[[2]] <- exp(boot_object$coefficients)
+```
+
 #### Ordinal model Bayesian fit
 
-We use brms to run a bayesian fit of the same regression model.
+``` r
+ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP + smoking +  don_ct + log_last_don  +
+             physical_act_daily_n + physical_act_freq_n  + log_Ferritin,  
+                   data = ordinal_data_temp,
+                   family = cumulative,
+                   save_all_pars = TRUE)
+```
 
-A staning issue here is that the default coefficient priors for ordinal models in brms are improper priors. Such priors are problematic when later computing Bayes Factor. A better option could be to compute LOO to show that adding ferritin does not improve the model.
+    ## Compiling the C++ model
 
-##### Model fit
+    ## recompiling to avoid crashing R session
 
-##### Model diagnostics
-
-###### Posterior probability check
-
-![](index_files/figure-markdown_github/unnamed-chunk-139-1.png)
-
-###### Diagnostics of the MCMC sampling
-
-![](index_files/figure-markdown_github/unnamed-chunk-140-1.png)![](index_files/figure-markdown_github/unnamed-chunk-140-2.png)![](index_files/figure-markdown_github/unnamed-chunk-140-3.png)![](index_files/figure-markdown_github/unnamed-chunk-140-4.png)
-
-##### Model comparison
-
-We use LOO (leave-One-OUt cross validation). We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor.
+    ## Start sampling
 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 1).
     ## Chain 1: 
-    ## Chain 1: Gradient evaluation took 0.000418 seconds
-    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 4.18 seconds.
+    ## Chain 1: Gradient evaluation took 0.000462 seconds
+    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 4.62 seconds.
     ## Chain 1: Adjust your expectations accordingly!
     ## Chain 1: 
     ## Chain 1: 
@@ -17298,15 +12418,15 @@ We use LOO (leave-One-OUt cross validation). We compare a restricted model witho
     ## Chain 1: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 1: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 1: 
-    ## Chain 1:  Elapsed Time: 7.61553 seconds (Warm-up)
-    ## Chain 1:                7.90337 seconds (Sampling)
-    ## Chain 1:                15.5189 seconds (Total)
+    ## Chain 1:  Elapsed Time: 7.54115 seconds (Warm-up)
+    ## Chain 1:                6.31951 seconds (Sampling)
+    ## Chain 1:                13.8607 seconds (Total)
     ## Chain 1: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 2).
     ## Chain 2: 
-    ## Chain 2: Gradient evaluation took 0.000366 seconds
-    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 3.66 seconds.
+    ## Chain 2: Gradient evaluation took 0.000372 seconds
+    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 3.72 seconds.
     ## Chain 2: Adjust your expectations accordingly!
     ## Chain 2: 
     ## Chain 2: 
@@ -17323,15 +12443,15 @@ We use LOO (leave-One-OUt cross validation). We compare a restricted model witho
     ## Chain 2: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 2: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 2: 
-    ## Chain 2:  Elapsed Time: 7.50058 seconds (Warm-up)
-    ## Chain 2:                6.48786 seconds (Sampling)
-    ## Chain 2:                13.9884 seconds (Total)
+    ## Chain 2:  Elapsed Time: 7.63427 seconds (Warm-up)
+    ## Chain 2:                9.40166 seconds (Sampling)
+    ## Chain 2:                17.0359 seconds (Total)
     ## Chain 2: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 3).
     ## Chain 3: 
-    ## Chain 3: Gradient evaluation took 0.000346 seconds
-    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 3.46 seconds.
+    ## Chain 3: Gradient evaluation took 0.000326 seconds
+    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 3.26 seconds.
     ## Chain 3: Adjust your expectations accordingly!
     ## Chain 3: 
     ## Chain 3: 
@@ -17348,15 +12468,15 @@ We use LOO (leave-One-OUt cross validation). We compare a restricted model witho
     ## Chain 3: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 3: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 3: 
-    ## Chain 3:  Elapsed Time: 7.38511 seconds (Warm-up)
-    ## Chain 3:                7.78504 seconds (Sampling)
-    ## Chain 3:                15.1702 seconds (Total)
+    ## Chain 3:  Elapsed Time: 7.81885 seconds (Warm-up)
+    ## Chain 3:                6.34741 seconds (Sampling)
+    ## Chain 3:                14.1663 seconds (Total)
     ## Chain 3: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 4).
     ## Chain 4: 
-    ## Chain 4: Gradient evaluation took 0.000387 seconds
-    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 3.87 seconds.
+    ## Chain 4: Gradient evaluation took 0.000318 seconds
+    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 3.18 seconds.
     ## Chain 4: Adjust your expectations accordingly!
     ## Chain 4: 
     ## Chain 4: 
@@ -17373,47 +12493,259 @@ We use LOO (leave-One-OUt cross validation). We compare a restricted model witho
     ## Chain 4: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 4: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 4: 
-    ## Chain 4:  Elapsed Time: 7.07169 seconds (Warm-up)
-    ## Chain 4:                7.2401 seconds (Sampling)
-    ## Chain 4:                14.3118 seconds (Total)
+    ## Chain 4:  Elapsed Time: 8.03053 seconds (Warm-up)
+    ## Chain 4:                8.57453 seconds (Sampling)
+    ## Chain 4:                16.6051 seconds (Total)
     ## Chain 4:
+
+``` r
+bayes_regression_coeffs_men <- 
+  tidy(ordinal_fit_B_men) %>% 
+  dplyr::select(-std.error) %>% 
+   dplyr::filter(!term %in% c("b_Intercept[1]", "b_Intercept[2]", "b_Intercept[3]","lp__",
+                            "temp_Intercept[1]", "temp_Intercept[2]", "temp_Intercept[3]" )) %>%
+  mutate(term = str_remove(term, "b_")) %>% 
+  rename(regressor = term, coefficient = estimate, 
+         Lower = lower, Upper = upper)
+
+bayes_regression_coeffs_men <-
+   bayes_regression_coeffs_men %>% 
+    gather(key = key, value = value, -regressor) %>% 
+    mutate(value = exp(value),
+           key = paste(key, "OR", sep = "_")) %>% 
+    spread(key = key, value =  value) %>% 
+    full_join(bayes_regression_coeffs_men, by = "regressor") %>% 
+   mutate(sex = "Men",
+         method = "Bayes") %>%    
+    mutate(regressor = ifelse(regressor == "smokingyes", "smoking_yes", regressor )) 
+```
+
+##### Model diagnostics
+
+###### Posterior probability check
+
+``` r
+pp_check(ordinal_fit_B_men)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-138-1.png)
+
+###### Diagnostics of the MCMC sampling
+
+``` r
+stan_trace(ordinal_fit_B_men$fit)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-139-1.png)
+
+``` r
+# raftery.diag(data.brms)
+stan_ac(ordinal_fit_B_men$fit)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-139-2.png)
+
+``` r
+stan_rhat(ordinal_fit_B_men$fit)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-139-3.png)
+
+``` r
+stan_ess(ordinal_fit_B_men$fit)
+```
+
+![](index_files/figure-markdown_github/unnamed-chunk-139-4.png)
+
+##### Model comparison
+
+We use LOO (leave-One-OUt cross validation). We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor.
+
+``` r
+ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log_CRP + smoking + don_ct   +
+                                 log_last_don + physical_act_daily_n + physical_act_freq_n ,
+                   data = ordinal_data_temp,
+                   family = cumulative,
+                   save_all_pars = TRUE)
+```
+
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 1).
+    ## Chain 1: 
+    ## Chain 1: Gradient evaluation took 0.000429 seconds
+    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 4.29 seconds.
+    ## Chain 1: Adjust your expectations accordingly!
+    ## Chain 1: 
+    ## Chain 1: 
+    ## Chain 1: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 1: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 1: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 1: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 1: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 1: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 1: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 1: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 1: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 1: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 1: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 1: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 1: 
+    ## Chain 1:  Elapsed Time: 7.73234 seconds (Warm-up)
+    ## Chain 1:                7.96702 seconds (Sampling)
+    ## Chain 1:                15.6994 seconds (Total)
+    ## Chain 1: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 2).
+    ## Chain 2: 
+    ## Chain 2: Gradient evaluation took 0.000371 seconds
+    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 3.71 seconds.
+    ## Chain 2: Adjust your expectations accordingly!
+    ## Chain 2: 
+    ## Chain 2: 
+    ## Chain 2: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 2: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 2: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 2: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 2: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 2: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 2: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 2: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 2: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 2: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 2: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 2: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 2: 
+    ## Chain 2:  Elapsed Time: 7.63468 seconds (Warm-up)
+    ## Chain 2:                6.60882 seconds (Sampling)
+    ## Chain 2:                14.2435 seconds (Total)
+    ## Chain 2: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 3).
+    ## Chain 3: 
+    ## Chain 3: Gradient evaluation took 0.000322 seconds
+    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 3.22 seconds.
+    ## Chain 3: Adjust your expectations accordingly!
+    ## Chain 3: 
+    ## Chain 3: 
+    ## Chain 3: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 3: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 3: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 3: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 3: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 3: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 3: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 3: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 3: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 3: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 3: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 3: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 3: 
+    ## Chain 3:  Elapsed Time: 7.51016 seconds (Warm-up)
+    ## Chain 3:                7.83561 seconds (Sampling)
+    ## Chain 3:                15.3458 seconds (Total)
+    ## Chain 3: 
+    ## 
+    ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 4).
+    ## Chain 4: 
+    ## Chain 4: Gradient evaluation took 0.000377 seconds
+    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 3.77 seconds.
+    ## Chain 4: Adjust your expectations accordingly!
+    ## Chain 4: 
+    ## Chain 4: 
+    ## Chain 4: Iteration:    1 / 2000 [  0%]  (Warmup)
+    ## Chain 4: Iteration:  200 / 2000 [ 10%]  (Warmup)
+    ## Chain 4: Iteration:  400 / 2000 [ 20%]  (Warmup)
+    ## Chain 4: Iteration:  600 / 2000 [ 30%]  (Warmup)
+    ## Chain 4: Iteration:  800 / 2000 [ 40%]  (Warmup)
+    ## Chain 4: Iteration: 1000 / 2000 [ 50%]  (Warmup)
+    ## Chain 4: Iteration: 1001 / 2000 [ 50%]  (Sampling)
+    ## Chain 4: Iteration: 1200 / 2000 [ 60%]  (Sampling)
+    ## Chain 4: Iteration: 1400 / 2000 [ 70%]  (Sampling)
+    ## Chain 4: Iteration: 1600 / 2000 [ 80%]  (Sampling)
+    ## Chain 4: Iteration: 1800 / 2000 [ 90%]  (Sampling)
+    ## Chain 4: Iteration: 2000 / 2000 [100%]  (Sampling)
+    ## Chain 4: 
+    ## Chain 4:  Elapsed Time: 7.09561 seconds (Warm-up)
+    ## Chain 4:                7.31299 seconds (Sampling)
+    ## Chain 4:                14.4086 seconds (Total)
+    ## Chain 4:
+
+``` r
+LOO(ordinal_fit_restricted, ordinal_fit_B_men)
+```
 
     ##                                              LOOIC    SE
     ## ordinal_fit_restricted                     1926.06 35.64
     ## ordinal_fit_B_men                          1927.39 35.78
     ## ordinal_fit_restricted - ordinal_fit_B_men   -1.33  1.46
 
-Adding Ferritin does not improve the model.
+Adding Ferritin does not improve the fit between the data and the model.
 
-Table / Figure
---------------
+Tables and Figures
+------------------
 
 Supplementary Table / Figure
 ----------------------------
 
+``` r
+bayes_regression_coeffs_women %>% 
+  bind_rows(bayes_regression_coeffs_men) %>% 
+  rename(group = sex) %>% 
+  dplyr::select(-coefficient:-Upper, - method) %>% 
+  mutate(CI = paste(round(Lower_OR,2), round(Upper_OR,2), sep = "-" )) %>% 
+  dplyr::select(group, regressor, coefficient_OR, CI ) %>% 
+  mutate(regressor = dplyr::recode(regressor, age = "Age",
+                       don_ct = "Nb donations (2 years)",
+                       log_CRP = "CRP",
+                       log_Ferritin = "Ferritin",
+                       log_last_don =  "Nb of days since last donation",
+                       menopausal_status = "Menopausal status",
+                       physical_act_daily_n = "Physical activity (daily amount)", 
+                       physical_act_freq_n = "Physical activity (frequency)",
+                       smoking = "Smoking")) %>% 
+  rename(Odds.Ratio = coefficient_OR) %>% 
+  stargazer(title= "Bayesian ordinal logistic regression",
+            type = "html", 
+          summary = FALSE, 
+          rownames = FALSE,
+          header = TRUE,
+          out = "../results/tables/supp_table_4_ordinal_bayes_health.html",
+          initial.zero = FALSE, 
+          digits = 2)  
+```
+
 <table style="text-align:center">
+<caption>
+<strong>Bayesian ordinal logistic regression</strong>
+</caption>
 <tr>
-<td colspan="3" style="border-bottom: 1px solid black">
+<td colspan="4" style="border-bottom: 1px solid black">
 </td>
 </tr>
 <tr>
 <td style="text-align:left">
+group
+</td>
+<td>
 regressor
 </td>
 <td>
-coefficient\_OR
+Odds.Ratio
 </td>
 <td>
 CI
 </td>
 </tr>
 <tr>
-<td colspan="3" style="border-bottom: 1px solid black">
+<td colspan="4" style="border-bottom: 1px solid black">
 </td>
 </tr>
 <tr>
 <td style="text-align:left">
-age
+Women
+</td>
+<td>
+Age
 </td>
 <td>
 .95
@@ -17424,6 +12756,9 @@ age
 </tr>
 <tr>
 <td style="text-align:left">
+Women
+</td>
+<td>
 BMI
 </td>
 <td>
@@ -17435,7 +12770,10 @@ BMI
 </tr>
 <tr>
 <td style="text-align:left">
-don\_ct
+Women
+</td>
+<td>
+Nb donations (2 years)
 </td>
 <td>
 1.07
@@ -17446,7 +12784,10 @@ don\_ct
 </tr>
 <tr>
 <td style="text-align:left">
-log\_CRP
+Women
+</td>
+<td>
+CRP
 </td>
 <td>
 .76
@@ -17457,7 +12798,10 @@ log\_CRP
 </tr>
 <tr>
 <td style="text-align:left">
-log\_Ferritin
+Women
+</td>
+<td>
+Ferritin
 </td>
 <td>
 1.11
@@ -17468,7 +12812,10 @@ log\_Ferritin
 </tr>
 <tr>
 <td style="text-align:left">
-log\_last\_don
+Women
+</td>
+<td>
+Nb of days since last donation
 </td>
 <td>
 1.00
@@ -17479,7 +12826,10 @@ log\_last\_don
 </tr>
 <tr>
 <td style="text-align:left">
-menopausal\_status
+Women
+</td>
+<td>
+Menopausal status
 </td>
 <td>
 .97
@@ -17490,7 +12840,10 @@ menopausal\_status
 </tr>
 <tr>
 <td style="text-align:left">
-physical\_act\_daily\_n
+Women
+</td>
+<td>
+Physical activity (daily amount)
 </td>
 <td>
 1.23
@@ -17501,7 +12854,10 @@ physical\_act\_daily\_n
 </tr>
 <tr>
 <td style="text-align:left">
-physical\_act\_freq\_n
+Women
+</td>
+<td>
+Physical activity (frequency)
 </td>
 <td>
 1.40
@@ -17512,7 +12868,10 @@ physical\_act\_freq\_n
 </tr>
 <tr>
 <td style="text-align:left">
-smoking
+Women
+</td>
+<td>
+Smoking
 </td>
 <td>
 .84
@@ -17523,7 +12882,10 @@ smoking
 </tr>
 <tr>
 <td style="text-align:left">
-age
+Men
+</td>
+<td>
+Age
 </td>
 <td>
 .87
@@ -17534,6 +12896,9 @@ age
 </tr>
 <tr>
 <td style="text-align:left">
+Men
+</td>
+<td>
 BMI
 </td>
 <td>
@@ -17545,7 +12910,10 @@ BMI
 </tr>
 <tr>
 <td style="text-align:left">
-don\_ct
+Men
+</td>
+<td>
+Nb donations (2 years)
 </td>
 <td>
 1.08
@@ -17556,7 +12924,10 @@ don\_ct
 </tr>
 <tr>
 <td style="text-align:left">
-log\_CRP
+Men
+</td>
+<td>
+CRP
 </td>
 <td>
 1.08
@@ -17567,7 +12938,10 @@ log\_CRP
 </tr>
 <tr>
 <td style="text-align:left">
-log\_Ferritin
+Men
+</td>
+<td>
+Ferritin
 </td>
 <td>
 1.06
@@ -17578,7 +12952,10 @@ log\_Ferritin
 </tr>
 <tr>
 <td style="text-align:left">
-log\_last\_don
+Men
+</td>
+<td>
+Nb of days since last donation
 </td>
 <td>
 1.02
@@ -17589,7 +12966,10 @@ log\_last\_don
 </tr>
 <tr>
 <td style="text-align:left">
-physical\_act\_daily\_n
+Men
+</td>
+<td>
+Physical activity (daily amount)
 </td>
 <td>
 1.26
@@ -17600,7 +12980,10 @@ physical\_act\_daily\_n
 </tr>
 <tr>
 <td style="text-align:left">
-physical\_act\_freq\_n
+Men
+</td>
+<td>
+Physical activity (frequency)
 </td>
 <td>
 1.45
@@ -17611,7 +12994,10 @@ physical\_act\_freq\_n
 </tr>
 <tr>
 <td style="text-align:left">
-smoking
+Men
+</td>
+<td>
+Smoking
 </td>
 <td>
 .66
@@ -17621,10 +13007,34 @@ smoking
 </td>
 </tr>
 <tr>
-<td colspan="3" style="border-bottom: 1px solid black">
+<td colspan="4" style="border-bottom: 1px solid black">
 </td>
 </tr>
 </table>
+``` r
+stargazer(fit_women,fit_men,
+          out = "../results/tables/supp_table_3_frequentist_health.html",
+          intercept.bottom = FALSE,
+          title = "Ordinal logistic regression",
+          type = "html",
+          single.row = TRUE,
+          ci = TRUE,
+          ci.custom = CI_regression_health,
+          coef = regress_coeff_health,
+          p.auto = FALSE,
+          header = FALSE,
+          covariate.labels =c("Health > Good", "Health > y VeGood", "Health > Excellent", "Menopausal status",
+                          "Age",  "BMI", "CRP", "Smoking(yes)", "Nb donations (2 years)",
+                          "Nb of days since last donation",
+                        "Physical activity (daily amount)", "Physical activity (frequency)", "Ferritin"),
+          dep.var.caption   = "How has your health been in general?", 
+          dep.var.labels.include = FALSE,
+          column.labels = c("Women", "Men"),
+          # column.separate = c(2, 2,2),
+          model.numbers= FALSE,
+          report=('vcsp'))
+```
+
 <table style="text-align:center">
 <caption>
 <strong>Ordinal logistic regression</strong>
@@ -17849,7 +13259,7 @@ p = 0.022
 </tr>
 <tr>
 <td style="text-align:left">
-Nb of days since last donation (log)
+Nb of days since last donation
 </td>
 <td>
 1.005 (0.888, 1.149)
@@ -17912,7 +13322,7 @@ p = 0.00000
 </tr>
 <tr>
 <td style="text-align:left">
-Ferritin (log)
+Ferritin
 </td>
 <td>
 1.110 (0.982, 1.255)
@@ -17981,9 +13391,35 @@ chi<sup>2</sup>
 </td>
 </tr>
 </table>
+``` r
+final_results <- ordinal_regression_coefficients_women %>% 
+  bind_rows(bayes_regression_coeffs_women, 
+            ordinal_regression_coefficients_men,
+            bayes_regression_coeffs_men) %>% 
+  filter(regressor == "log_Ferritin") %>% 
+  mutate(regressor = "Ferritin") %>% 
+  rename(Odds.Ratio = coefficient_OR,
+         Odds.Ratio.low.CI = Lower_OR,
+         Odds.Ratio.upp.CI = Upper_OR,
+         coeff.low.CI = Lower,
+          coeff.upp.CI = Upper) %>% 
+  dplyr::select(regressor:Odds.Ratio.upp.CI, coefficient,coeff.low.CI,coeff.upp.CI )
+```
+
+``` r
+stargazer(final_results, 
+          type = "html", 
+          summary = FALSE, 
+          rownames = FALSE,
+          header = TRUE,
+          out = "../results/tables/table_4_ordinal_reg.html",
+          initial.zero = FALSE, 
+          digits = 5)
+```
+
 <table style="text-align:center">
 <tr>
-<td colspan="9" style="border-bottom: 1px solid black">
+<td colspan="7" style="border-bottom: 1px solid black">
 </td>
 </tr>
 <tr>
@@ -17991,37 +13427,31 @@ chi<sup>2</sup>
 regressor
 </td>
 <td>
-coefficient\_OR
+Odds.Ratio
 </td>
 <td>
-Lower\_OR
+Odds.Ratio.low.CI
 </td>
 <td>
-Upper\_OR
-</td>
-<td>
-Lower
-</td>
-<td>
-Upper
+Odds.Ratio.upp.CI
 </td>
 <td>
 coefficient
 </td>
 <td>
-sex
+coeff.low.CI
 </td>
 <td>
-method
+coeff.upp.CI
 </td>
 </tr>
 <tr>
-<td colspan="9" style="border-bottom: 1px solid black">
+<td colspan="7" style="border-bottom: 1px solid black">
 </td>
 </tr>
 <tr>
 <td style="text-align:left">
-log\_Ferritin
+Ferritin
 </td>
 <td>
 1.10965
@@ -18033,24 +13463,18 @@ log\_Ferritin
 1.25465
 </td>
 <td>
+.10405
+</td>
+<td>
 -.01776
 </td>
 <td>
 .22686
 </td>
-<td>
-.10405
-</td>
-<td>
-Women
-</td>
-<td>
-GLM
-</td>
 </tr>
 <tr>
 <td style="text-align:left">
-log\_Ferritin
+Ferritin
 </td>
 <td>
 1.11094
@@ -18062,24 +13486,18 @@ log\_Ferritin
 1.23107
 </td>
 <td>
+.10521
+</td>
+<td>
 .00504
 </td>
 <td>
 .20788
 </td>
-<td>
-.10521
-</td>
-<td>
-Women
-</td>
-<td>
-Bayes
-</td>
 </tr>
 <tr>
 <td style="text-align:left">
-log\_Ferritin
+Ferritin
 </td>
 <td>
 1.05841
@@ -18091,24 +13509,18 @@ log\_Ferritin
 1.23796
 </td>
 <td>
+.05677
+</td>
+<td>
 -.09850
 </td>
 <td>
 .21347
 </td>
-<td>
-.05677
-</td>
-<td>
-Men
-</td>
-<td>
-GLM
-</td>
 </tr>
 <tr>
 <td style="text-align:left">
-log\_Ferritin
+Ferritin
 </td>
 <td>
 1.05772
@@ -18120,23 +13532,17 @@ log\_Ferritin
 1.20498
 </td>
 <td>
+.05612
+</td>
+<td>
 -.07484
 </td>
 <td>
 .18646
 </td>
-<td>
-.05612
-</td>
-<td>
-Men
-</td>
-<td>
-Bayes
-</td>
 </tr>
 <tr>
-<td colspan="9" style="border-bottom: 1px solid black">
+<td colspan="7" style="border-bottom: 1px solid black">
 </td>
 </tr>
 </table>
@@ -18144,6 +13550,8 @@ References
 ==========
 
 Abreu, Mery Natali Silva, Arminda Lucia Siqueira, and Waleska Teixeira Caiaffa. 2009. “Ordinal Logistic Regression in Epidemiological Studies.” *Revista de Saude Publica* 43 (1). SciELO Brasil: 183–94.
+
+Bender, R, and U Grouven. 1997. “Ordinal logistic regression in medical research.” *Journal of the Royal College of Physicians of London* 31 (5): 546–51.
 
 Davison, Glenda M, Bongani B Nkambule, Zibusiso Mkandla, Gloudina M Hon, Andre P Kengne, Rajiv T Erasmus, and Tandi E Matsha. 2017. “Platelet, Monocyte and Neutrophil Activation and Glucose Tolerance in South African Mixed Ancestry Individuals.” *Scientific Reports* 7. Nature Publishing Group: 40329.
 

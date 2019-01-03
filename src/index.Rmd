@@ -5,7 +5,7 @@ output: github_document
 bibliography: index.bib
 ---
 
-```{r setup, include=FALSE, message = FALSE}
+```{r setup, , message = FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(janitor)
@@ -454,8 +454,6 @@ blood_data_summary_final <-
                                         TRUE ~ 3))
 ```
 
-
-
 # Results - Population description
 
 ## Population description - Table 1
@@ -768,7 +766,7 @@ final_p_values %>%
   kable()
 ```
 
-```{r , warning=FALSE, include=FALSE}
+```{r , warning=FALSE, }
 
 # Saving resuls of statistical tests to html file
 
@@ -784,16 +782,15 @@ stargazer(final_p_values, type = "html",
 ```
 
 
-
 # Results - Distributions of hemoglobin, ferritin and sTfR
 
 ## Incidence of anemia and iron deficiency
 
 Unless otherwise specified, the thresholds used are the following:
 
-* Hb: 117 g/L for women, 134 g/L for men [Reference](https://www.terveyskirjasto.fi/terveyskirjasto/tk.koti?p_artikkeli=snk03031)
+* Hb: 117 g/L for women, 134 g/L for men ([Reference](https://www.terveyskirjasto.fi/terveyskirjasto/tk.koti?p_artikkeli=snk03031))
 * Ferritin: 15 for all groups
-* sTfR: 4.4 mg/L for women and 5 mg/L for men [Reference](https://huslab.fi/cgi-bin/ohjekirja/tt_show.exe?assay=4720&terms=trans)
+* sTfR: 4.4 mg/L for women and 5 mg/L for men ([Reference](https://huslab.fi/cgi-bin/ohjekirja/tt_show.exe?assay=4720&terms=trans))
     
     
 ```{r}
@@ -861,9 +858,12 @@ data %>%
 
 ```
 
+
 ### Overlap of low ferritin and high sTfR 
 
+
 We compute the proportion (and the 95%CI) of donors who have low ferritin only, high sTfR only and both low ferritin and high sTfR. 
+
 
 ```{r message=FALSE, warning=FALSE}
 blood_data_summary_final <- 
@@ -925,6 +925,7 @@ tab3Mat <- print(summary_table, quote = FALSE, noSpaces = TRUE, printToggle = FA
 tab3Mat %>% 
   kable()
 ```
+
 
 ### Further computations for discussion
 
@@ -1009,6 +1010,8 @@ blood_data_summary_final %>%
   summarise(Proportion.High.sTfR =mean(high.TfR)) %>% 
   kable()
 ```
+
+
 
 ### CRP levels for anemic donors with and without ID
 
@@ -1240,9 +1243,11 @@ The regressors were entered as follows in the regression models for sTfR and fer
 
 * Continuous variables were entered as continuous predictors
   * age, number of donations in last two years, nb of days since last donation, CRP, BMI
+  
 * Binary variables were entered as categorical (but coded as numerical for relative importance):
   * Smoking, pregnancy
-* Ordinal variables were coded on a linear scale and entered as continuous [REF](https://www3.nd.edu/~rwilliam/stats3/OrdinalIndependent.pdf)
+  
+* Ordinal variables were coded on a linear scale and entered as continuous [(Reference)](https://www3.nd.edu/~rwilliam/stats3/OrdinalIndependent.pdf)
   * Iron supplementation 
   * All dietary intake
   
@@ -1267,25 +1272,27 @@ blood_data_summary_reg <- blood_data_summary_final %>%
 Data transformations:
 
 * Log transformed variables: 
-   * Ferritin
-   * sTfR
-   * CRP 
+  * Ferritin
+  * sTfR
+  * CRP 
+  
 * Age is divided by 5 to simplify coeff interpretation
 * Number of days before donation is transformed as $log\_last\_don = log(last\_don)/log(2)$ to help with the interpretation of coefficients. 
-    * An increase in one of the transformed variable is equivalent to a doubling of the number of days since last donation.
+  * An increase in one of the transformed variable is equivalent to a doubling of the number of days since last donation.
 
 * Standardization:
-   * Standardized coefficients: 
-      * All dependent and independent variables were standardized
-   * Coefficients:
-     * All dependent variables entered as continuous varaibles are centered but not scaled. 
+  * Standardized coefficients: 
+    * All dependent and independent variables were standardized
+      
+  * Coefficients:
+    * All dependent variables entered as continuous varaibles are centered but not scaled. 
 
-## Pre_menopausal women
+## Pre-menopausal women
 ### Data pre-processing
 
 We center all variables entered as continuous.
 
-```{r, echo=FALSE}
+```{r}
 # Center variables
 
 test_data_std <- blood_data_summary_reg %>% 
@@ -1314,11 +1321,11 @@ test_data_std <- blood_data_summary_reg %>%
 ```
 
 
-### Regressions Ferritin
+### Mutiple regression - ferritin as outcome
 
 #### Correlograms
 
-```{r echo=FALSE}
+```{r}
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
@@ -1327,7 +1334,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-```{r echo=FALSE}
+```{r}
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "pregnancy",  "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
@@ -1337,7 +1344,7 @@ ggpairs(test_data_std,
 ```
 
 
-```{r echo=FALSE}
+```{r}
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "coffee_n", "tea_n", "beer_n", "wine_n", "liquor_n"),
@@ -1348,7 +1355,7 @@ ggpairs(test_data_std,
 
 #### OLS 
 
-```{r include=FALSE}
+```{r }
 
 lm7_pre_menop_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
 
@@ -1384,7 +1391,7 @@ pre_menop_diag_plot
 
 These plots identify several potentially problematic observations, therefore we also compute robust regression. 
 
-#### Robust regression model amd p-values
+#### Robust regression model and p-values
 
 
 ```{r, warning =  FALSE}
@@ -1425,9 +1432,9 @@ tidy_model_w_pre <- tidy(robust_mdl_pre_menop_w)
 
 #### Model outputs and interpretation
 
-```{r echo=FALSE, warning=FALSE, results='asis'}
+```{r  warning=FALSE, results='asis'}
 stargazer( robust_mdl_pre_menop_w, lm7_pre_menop_std,
-          title = "Pre-menopausal women",
+          title = "Multiple linear regressions - Pre-menopausal women",
           intercept.bottom = FALSE,
           type = "html",
           single.row = TRUE,
@@ -1464,7 +1471,7 @@ Results from robust and OLS rergessions are similar. Ferritin levels are positiv
 
 The relative importance analyses are run only on regressors that are consistently significant in at least one demographic group.
 
-```{r}
+```{r, warning = FALSE, message=FALSE}
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
@@ -1483,12 +1490,12 @@ plot_data_lm7_pre_menop <- data_frame(regressor = names(plotdata@first),
 ```
 
 
-### Regressions sTfR
+### Mutiple regression - sTfR as outcome
 
 ##### Correlograms
 
 
-```{r echo=FALSE}
+```{r }
 
 ggpairs(test_data_std, 
         columns = c("log_sTfR", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
@@ -1499,10 +1506,7 @@ ggpairs(test_data_std,
 
 #### OLS
 
-```{r include=FALSE}
-
-# we run the sTfR mdoels here to take advanatge of the pre-processing
-
+```{r}
 lm7_pre_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
 
 ```
@@ -1569,7 +1573,7 @@ mdl_sTfR_pre_menop_w <- tidy_mdl %>%
 
 #### Model outputs and interpretation
 
-```{r echo=FALSE, warning=FALSE, results='asis'}
+```{r warning=FALSE, results='asis'}
 stargazer(robust_mdl_sTfR_pre_menop_w, lm7_pre_menop_sTfR, 
           title = "Pre-menopausal women",
           intercept.bottom = FALSE,
@@ -1596,7 +1600,7 @@ stargazer(robust_mdl_sTfR_pre_menop_w, lm7_pre_menop_sTfR,
 
 The relative importance analyses are run only on regressors that are consistently significant in at least one demographic group.
 
-```{r}
+```{r, warning = FALSE, message=FALSE}
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
@@ -1614,13 +1618,13 @@ plot_data_lm7_pre_menop_sTfR <- data_frame(regressor = names(plotdata@first),
 
 ```
 
-## Post_menopausal women
+## Post-menopausal women
 
 ### Data pre-processing
 
 We center all variables entered as continuous.
 
-```{r, echo=FALSE}
+```{r}
 # Center and standardize variables
 
 test_data_std <- blood_data_summary_reg %>% 
@@ -1651,11 +1655,11 @@ test_data_std <- blood_data_summary_reg %>%
 
 
 
-### Regression Ferritin
+### Mutiple regression - ferritin as outcome
 
 #### Correlograms
 
-```{r echo=FALSE}
+```{r}
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
@@ -1664,7 +1668,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-```{r echo=FALSE}
+```{r }
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "pregnancy", "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
@@ -1674,7 +1678,7 @@ ggpairs(test_data_std,
 ```
 
 
-```{r echo=FALSE}
+```{r }
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "coffee_n", "tea_n", "beer_n", "wine_n", "liquor_n"),
@@ -1685,7 +1689,7 @@ ggpairs(test_data_std,
 
 #### OLS
 
-```{r include=FALSE}
+```{r }
 
 lm7_post_menop_std <- lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
 
@@ -1694,7 +1698,7 @@ lm7_post_menop_std <- lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  +
 ##### Model diagnostics
 
 
-```{r}
+```{r, warning=FALSE}
 test_data_std %>%
   rowid_to_column("ID") %>%
   mutate(outlier = ifelse(ID == 48 | ID == 157 | ID == 430 | ID == 445 | ID == 448, TRUE, FALSE)) -> test_data_std
@@ -1720,7 +1724,7 @@ post_menop_diag_plot
 
 There are 4 observations that are seem to be problematic, so we also run robust regressions. 
 
-#### Robust regression model amd p-values
+#### Robust regression model and p-values
 
 ```{r, warning =  FALSE}
 
@@ -1755,7 +1759,7 @@ mdl_post_menop_w <- tidy_model_w_post %>%
 
 #### Model outputs and interpretation
 
-```{r echo=FALSE, warning=FALSE, results='asis'}
+```{r warning=FALSE, results='asis'}
 stargazer(robust_mdl_post_menop_w, lm7_post_menop_std, 
           title = "Post-menopausal women",
           intercept.bottom = FALSE,
@@ -1784,7 +1788,7 @@ Results from robust and OLS regressions differ slightly. In both models, ferriti
 
 #### Relative importance
 
-```{r}
+```{r, warning = FALSE, message = FALSE }
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1),
          pregnancy = ifelse(pregnancy == "no", 0,1)) 
@@ -1804,10 +1808,10 @@ plot_data_lm7_post_menop <- data_frame(regressor = names(plotdata@first),
 
 ```
 
-### Regressions sTfR
+### Mutiple regression - sTfR as outcome
 #### Correlograms
 
-```{r echo=FALSE}
+```{r}
 
 ggpairs(test_data_std, 
         columns = c("log_sTfR", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
@@ -1818,7 +1822,7 @@ ggpairs(test_data_std,
 
 #### OLS
 
-```{r include=FALSE}
+```{r }
 
 # we run the sTfR mdoels here to take advanatge of the pre-processing
 
@@ -1828,7 +1832,7 @@ lm7_post_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  +
 
 ##### Model diagnostics 
 
-```{r}
+```{r, warning=FALSE}
 test_data_std %>%
   # rowid_to_column("ID") %>%
   mutate(outlier = ifelse(ID == 249 | ID == 174 | ID == 200 | ID == 217 | ID == 208, TRUE, FALSE)) -> test_data_std
@@ -1850,7 +1854,7 @@ ggplot2::ggsave("../results/figures/supp_fig_3_post_menop_sTfR.svg", post_menop_
 pre_menop_diag_plot
 ```
 
-#### Robust regression model amd p-values
+#### Robust regression model and p-values
 
 
 ```{r, warning =  FALSE}
@@ -1886,9 +1890,9 @@ mdl_sTfR_post_menop_w <- tidy_mdl %>%
 
 #### Model outputs and interpretation
 
-```{r echo=FALSE, warning=FALSE, results='asis'}
+```{r, warning=FALSE, results='asis'}
 stargazer(robust_mdl_sTfR_post_menop_w, lm7_post_menop_sTfR, 
-          title = "Pre-menopausal women",
+          title = "Multiple linear regressions - Post-menopausal women",
           intercept.bottom = FALSE,
           type = "html",
           single.row = TRUE,
@@ -1916,7 +1920,7 @@ we run this only on significant regressors ?
 Is very computationally intensive if we run on all 20 predictors...
 So we only run the predictors that were significant in at least one of the donor groups.
 
-```{r include=FALSE, warning = FALSE}
+```{r , warning = FALSE}
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
@@ -1937,7 +1941,7 @@ plot_data_lm7_post_menop_sTfR <- data_frame(regressor = names(plotdata@first),
 
 ### Data pre-processing
 
-```{r, echo=FALSE}
+```{r}
 # Center and standardize variables
 
 test_data_std <- blood_data_summary_reg %>% 
@@ -1967,11 +1971,11 @@ test_data_std <- blood_data_summary_reg %>%
 ```
 
 
-### Regressions Ferritin
+### Mutiple regression - ferritin as outcome
 
 #### Correlograms
 
-```{r echo=FALSE}
+```{r }
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
@@ -1981,7 +1985,7 @@ ggpairs(test_data_std,
 ```
 
 
-```{r echo=FALSE}
+```{r }
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
@@ -1991,7 +1995,7 @@ ggpairs(test_data_std,
 ```
 
 
-```{r echo=FALSE}
+```{r }
 
 ggpairs(test_data_std, 
         columns = c("log_ferr", "coffee_n", "tea_n", "beer_n", "wine_n", "liquor_n"),
@@ -2002,7 +2006,7 @@ ggpairs(test_data_std,
 
 #### OLS
 
-```{r include=FALSE}
+```{r }
 
 lm7_men_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
 ```
@@ -2034,7 +2038,7 @@ autoplot(lm7_men_std, data = test_data_std, which = c(1:6), ncol = 3,  label.n =
 men_diag_plot
 ```
 
-#### Robust regression model amd p-values
+#### Robust regression model and p-values
 
 ```{r, warning =  FALSE}
 
@@ -2069,9 +2073,9 @@ mdl_men <- tidy_model_men %>%
 
 #### Model outputs and interpretation
 
-```{r echo=FALSE, warning=FALSE, results='asis'}
+```{r , warning=FALSE, results='asis'}
 stargazer(robust_mdl_men, lm7_men_std,
-          title = "Men",
+          title = "Multiple linear regressions - Men",
           intercept.bottom = FALSE,
           type = "html",
           single.row = TRUE,
@@ -2092,7 +2096,7 @@ stargazer(robust_mdl_men, lm7_men_std,
           
 ```
 
-Results from robust and OLS rergessions are similar. In both models, ferritin levels are positively correlated with  age, BMI, nb of days since last donation,  red meat consumption as well as Beer and wine consumption (would not survive multiple comparison correction). and wine consumption (which would not survive multiple correction). Ferritin levels are negatively correlated with the number ofdonations and iron supplementation. A significant neg corelation with nb of donations squared indicates that the effect of nb of donations is larger for small numbers of donations than for large number of donations.
+Results from robust and OLS rergessions are similar. In both models, ferritin levels are positively correlated with  age, BMI, nb of days since last donation,  red meat consumption as well as Beer and wine consumption (would not survive multiple comparison correction). and wine consumption (which would not survive multiple correction). Ferritin levels are negatively correlated with the number of donations and iron supplementation. A significant negative corelation with the nb of donations squared indicates that the effect of nb of donations is larger for small numbers of donations than for large number of donations.
 
   * An increase in 5 years of age is associated with a `r round(exp(tidy_model_men %>% filter(term == "age") %>% magrittr::extract2("estimate"))-1,3)*100` % increase in Ferritin levels.
 
@@ -2100,14 +2104,14 @@ Results from robust and OLS rergessions are similar. In both models, ferritin le
   
   * An increase of meat consumption of one on our grading scale is associated with a `r round(exp(tidy_model_men %>% filter(term == "red_meat_n") %>% magrittr::extract2("estimate"))-1,3)*100` % increase in Ferritin levels.
 
-  * An increase of iron supplementation of one on our grading scale is associated with a `r round(exp(tidy_model_men %>% filter(term == "iron") %>% magrittr::extract2("estimate"))-1,3)*100` % decrease in Ferritin levels.
+  * An increase of iron supplementation of one on our grading scale is associated with a `r round(exp(tidy_model_men %>% filter(term == "iron") %>% magrittr::extract2("estimate"))-1,3)*-100` % decrease in Ferritin levels.
   
-  * An additional donation in the previous 2 years is associated with a `r round(exp(tidy_model_men %>% filter(term == "don_ct") %>% magrittr::extract2("estimate"))-1,3)*100` % decrease in Ferritin levels.
+  * An additional donation in the previous 2 years is associated with a `r round(exp(tidy_model_men %>% filter(term == "don_ct") %>% magrittr::extract2("estimate"))-1,3)*-100` % decrease in Ferritin levels.
 
 #### Relative importance
 
 
-```{r include=FALSE, warning = FALSE}
+```{r , warning = FALSE}
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
@@ -2124,12 +2128,12 @@ plot_data_lm7_men <- data_frame(regressor = names(plotdata@first),
 
 ```
 
-### Regressions sTfR
+### Mutiple regression - sTfR as outcome
 
 #### Correlograms
 
 
-```{r echo=FALSE}
+```{r }
 
 ggpairs(test_data_std, 
         columns = c("log_sTfR", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
@@ -2140,7 +2144,7 @@ ggpairs(test_data_std,
 
 #### OLS
 
-```{r include=FALSE}
+```{r }
 
 # we run the sTfR mdoels here to take advanatge of the pre-processing
 
@@ -2150,7 +2154,7 @@ lm7_men_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 
 
 ##### Model diagnostics 
 
-```{r}
+```{r, warning=FALSE}
 test_data_std %>%
    # rowid_to_column("ID") %>%
   mutate(outlier = ifelse(ID == 465 | ID == 91 | ID == 692 | ID == 342 | ID == 55 | ID == 339, TRUE, FALSE)) -> test_data_std
@@ -2175,13 +2179,10 @@ ggplot2::ggsave("../results/figures/supp_fig_3_men_sTfR.svg", post_menop_diag_pl
 pre_menop_diag_plot
 ```
 
-#### Robust regression model amd p-values
+#### Robust regression model and p-values
 
 
 ```{r, warning =  FALSE}
-
-# https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-
 # Run model 
 robust_mdl_sTfR_men <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking   + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
 
@@ -2211,9 +2212,9 @@ mdl_sTfR_men <- tidy_mdl %>%
 
 #### Model outputs and interpretation
 
-```{r echo=FALSE, warning=FALSE, results='asis'}
+```{r , warning=FALSE, results='asis'}
 stargazer(robust_mdl_sTfR_men, lm7_men_sTfR, 
-          title = "Men",
+          title = "Multiple regression - Men",
           intercept.bottom = FALSE,
           type = "html",
           single.row = TRUE,
@@ -2237,7 +2238,7 @@ stargazer(robust_mdl_sTfR_men, lm7_men_sTfR,
 #### Relative importance
 
 
-```{r include=FALSE, warning = FALSE}
+```{r , warning = FALSE}
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
@@ -2575,50 +2576,8 @@ bootstrap_Bca_CI_sTfR <- bootstrap_Bca_CI_sTfR %>%
           group == "Post_menopause_women" ~ "Post-menopausal women",
           TRUE ~ "Men"),
         group = ordered(group, levels = c( "Pre-menopausal women", "Post-menopausal women", "Men")))
-
-
-
 ```
 
-```{r, fig.width= 4}
-bootstrap_distrib %>% 
-  mutate(regressor = ifelse(regressor == "smokingyes", "smoking",regressor)) %>% 
-  mutate(regressor = ifelse(regressor == "smoking.L", "smoking",regressor)) %>% 
-  mutate(regressor = ifelse(regressor == "pregnancy.L", "pregnancy",regressor)) %>% 
-  mutate(regressor = ifelse(regressor == "pregnancyyes", "pregnancy",regressor)) %>% 
-  mutate(regressor = plyr::revalue(regressor, regressor_values),
-         regressor = ordered(regressor,
-                  levels =  c("Age", "BMI", "CRP (log)","Smoking",  "Pregnancy", "Nb donations (2 years)", 
-                              "(Nb donations (2 years))²",  "Days since last donation", "Iron supplementation",
-                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
-                               "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
-          regressor = fct_rev(regressor),
-          group = case_when(
-            group == "Pre_menopause_women" ~ "Pre-menopausal women",
-            group == "Post_menopause_women" ~ "Post-menopausal women",
-            TRUE ~ "Men"),
-          group = ordered(group, levels = c( "Pre-menopausal women", "Post-menopausal women", "Men"))) %>% 
-  ggplot(aes(x = regressor, y = coefficient, color = group, fill = group)) +
-  geom_violin(alpha = 0.4, trim = TRUE, 
-              position = position_dodge(width = 0.8), size = 0.1) +
-  geom_linerange(data = bootstrap_Bca_CI,
-                  aes(ymin = Bca_inf,
-                      ymax = Bca_sup),
-                  position = position_dodge(width = 0.8)) +
-  # geom_point(bootstrap_Bca_CI = lm_signs) +
-  scale_color_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
-                     limits = c( "Pre-menopausal women", "Post-menopausal women", "Men" )) +
-  scale_fill_manual(values = c( "#ff85a2",  "#de2d26","#00BFFF" ),
-                     limits = c( "Pre-menopausal women", "Post-menopausal women", "Men" )) +
-  # facet_grid(.~group) +
-  theme_bw()+
-  coord_flip() +
-  theme(legend.position = "none", 
-        legend.title = element_blank(),
-        axis.title = element_blank())
-# 
-# ggsave("../results/figures_draft/paper/bootstrap_OLS.pdf")
-```
 
 ### Robust regression - coeffs
 
@@ -2676,7 +2635,7 @@ lm_signs_sTfR_rob <- bind_rows(lm7_pre_menop_sTfR_rob,
 ```
 
 
-```{r echo=FALSE}
+```{r }
 
 get_coefficients <- function(data, boot_ind){
   
@@ -2928,7 +2887,7 @@ bootstrap_Bca_CI_robust_sTfR <- bootstrap_Bca_CI_robust_sTfR %>%
 ### Robust regression - betas
 
 
-```{r test2, echo=FALSE}
+```{r test2}
 
 get_coefficients <- function(data, boot_ind){
   
@@ -3152,55 +3111,6 @@ bootstrap_Bca_CI_robust_std_sTfR <- bootstrap_Bca_CI_robust_std_sTfR %>%
         group = ordered(group, levels = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )))
 ```
 
-
-```{r test3, echo=FALSE}
-
-bootstrap_distrib_robust_std %>% 
-  mutate(regressor = plyr::revalue(regressor, regressor_values),
-  regressor = ordered(regressor,
-                  levels =  c("Age","CRP (log)", "BMI","Nb donations (2 years)","(Nb donations (2 years))²", 
-                              "Days since last donation",  "Smoking",  "Pregnancy", "Iron supplementation", 
-                              "Red meat","Vegetables", "Fruit and Berries", "Milk",
-                         "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
-  regressor = fct_rev(regressor),
-  group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal women",
-    group == "Post_menopause_women" ~ "Post-menopausal women",
-    TRUE ~ "Men"),
-  group = ordered(group, levels = c( "Men",  "Post-menopausal women", "Pre-menopausal women" ) )) %>% 
-  ggplot(aes(x = regressor, y = coefficient, color = group, fill = group)) +
-  geom_hline(yintercept = 0 , color = "grey", linetype = "dotted") +
-  geom_violin(alpha = 0.2, trim = TRUE, 
-              position = position_dodge(width = 0.8), size = 0.1,
-              scale = "area") +
-  geom_linerange(data = bootstrap_Bca_CI_robust_std, aes(ymin=Bca_inf, ymax = Bca_sup ),
-                  position = position_dodge(width = 0.8), size = 0.5) +
-  # geom_point(data = bootstrap_Bca_CI_robust_std, position = position_dodge(width = 0.8), size = 0.75, shape = 1) +
-  scale_color_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
-                     limits = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )) +
-  scale_fill_manual(values = c( "#00BFFF",  "#de2d26", "#ff85a2" ),
-                     limits = c( "Men",  "Post-menopausal women", "Pre-menopausal women" )) +
-  theme_classic() +
-  theme(legend.position = "bottom",
-        # legend.title = element_blank(),
-        # legend.box = "vertical",
-        # legend.text = element_text(size = 8),
-        panel.grid.minor.y = element_blank(),
-        # panel.border = element_rect(colour = NA))+
-        # # strip.background=element_rect(colour="white",fill="white"),
-        # # strip.text = element_text(face="bold", size = 8),
-        axis.line = element_line(colour="black"),
-        # axis.text.y=element_text(angle=25,hjust=1),
-        axis.title.y = element_blank(),
-        axis.title.x = element_text(size = 8),
-        # axis.title.y =element_text(size = 8),
-        axis.text = element_text(size = 6),
-        panel.grid.major.y = element_blank()) +
-  coord_flip() +
-  xlab("Robust regression coefficient")
-
-```
-
-
 ## Results outputs
 
 ### Main results 
@@ -3230,7 +3140,7 @@ robust_p_values[[3]] = p_matrix
 ```
 
 
-```{r include=FALSE}
+```{r }
 
 # ouput to file
 
@@ -3286,6 +3196,7 @@ stargazer(robust_mdl_pre_menop_w, robust_mdl_post_menop_w, robust_mdl_men,
           digits = 3)
 ```
 
+
 #### Table 3 - Outcome = sTfR
 
 
@@ -3312,7 +3223,7 @@ robust_p_values_sTfR[[3]] = p_matrix
 ```
 
 
-```{r include=FALSE}
+```{r }
 
 # SAve output to file
 
@@ -3369,13 +3280,14 @@ stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_
 ```
 
 
+
 #### Figure 2 
 
 ##### Bootstrapped coeffs
 
 The bootstrapped coefficients that are displayed are the standardized coefficients. 
 
-```{r echo=FALSE}
+```{r}
 
 bootstrap_distrib_robust_std %>% 
   mutate(regressor = plyr::revalue(regressor, regressor_values),
@@ -3425,11 +3337,9 @@ test <- bootstrap_distrib_robust_std_sTfR %>%
                          "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
   regressor = fct_rev(regressor))
 
-unique(bootstrap_Bca_CI_robust_std_sTfR$regressor)
-
 ```
 
-```{r echo=FALSE}
+```{r}
 
 bootstrap_distrib_robust_std_sTfR %>% 
   mutate(regressor = plyr::revalue(regressor, regressor_values),
@@ -3613,7 +3523,7 @@ ggplot2::ggsave("../results/figures/figure_2_rela_impo_sTfR.svg", plt,  height =
 
 #### Figure 3 : Effects of main predictors of interest 
 
-```{r echo=FALSE, warning=FALSE}
+```{r , warning=FALSE}
 plt_1 <-blood_data_summary_final %>%
   dplyr::select(donor, group2, Ferritin, 
          TwoYearsFromStartCount_FB) %>% 
@@ -3774,7 +3684,7 @@ stargazer(lm7_pre_menop_std, lm7_post_menop_std, lm7_men_std,
 
 ### Supp Table 2: Regression of sTfR
 
-```{r include=FALSE}
+```{r }
 stargazer(lm7_pre_menop_sTfR, lm7_post_menop_sTfR,lm7_men_sTfR,
           out = "../results/tables/supp_table_2_sTfR_regressions_coeffs_OLS.html",
           intercept.bottom = FALSE,
@@ -3801,7 +3711,7 @@ stargazer(lm7_pre_menop_sTfR, lm7_post_menop_sTfR,lm7_men_sTfR,
 
 ### Supp Figure 3:  Visualizations of the effects of donation history on sTRF 
 
-```{r echo=FALSE, warning=FALSE}
+```{r , warning=FALSE}
 
 plt_1 <-blood_data_summary_final %>%
   dplyr::select(donor, group2, TransferrinR, 
@@ -3935,6 +3845,7 @@ cowplot::save_plot("../results/figures/Supp_Figure_3_sTFR.png",plt2, base_height
 Self-assessed health was measured using the following question:
 
 * How is your health in general?
+
   * Poor, satisfactory, good, very good, excellent
 
 We use ordinal logistic regression analysis [@Bender1997] to analyze the relationship between self-assessed health and ferritin. We test whether Ferritin level is a significant predictor of self-assessed health  when controlling for age, BMI, CRP, number of donations in the last two years, and physical activity. We run both a frequentist analysis and a Bayesian analysis. Results from the frequentist analysis suggest that Ferritin is not a significant predictor of self-perceived health in blood donors. According to the Bayesian analysis, the data dees not provide strong evidence in favor of ferritin co-varying with self-perceived health. 
@@ -4039,10 +3950,9 @@ ggplot2::ggsave("../results/figures/figure_4_health.png", plt,  height = 8.5 * 1
 
 To analyze the answers to the self-assessed health question properly, we use an ordinal proportional odds model or ordinal logistic model. This type of model is used to model outome variables that are ordered and represent an unknown latent variable. Here self-reported health is the ordered outcome variable we are trying to predict. Additional information about ordinal models in epidemiology can be found in [@abreu2009ordinal]. Because there are few donors who reported only satisfactory health, we pool together the data from pre-menopausal and post-menopausal women into a single women's group.
 
-An example of how to interpret the odds-ratio that are computed from the regression coefficients can be found [https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=9&cad=rja&uact=8&ved=2ahUKEwjg1PO9g_TcAhVhD5oKHSt1BVYQFjAIegQIABAC&url=http%3A%2F%2Fweb.pdx.edu%2F~newsomj%2Fcdaclass%2Fho_ordinal%2520regression.pdf&usg=AOvVaw2NRuZfLiLnX4bUfqOPVUne](here). The main assumption of the method is a proportional odds assumption which is explained here. Other good summary off main assupmtions of the method. [http://www.karlin.mff.cuni.cz/~pesta/NMFM404/ordinal.html#Ordered_logistic_regression](here).
+An example of how to interpret the odds-ratio that are computed from the regression coefficients can be found here [here](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=9&cad=rja&uact=8&ved=2ahUKEwjg1PO9g_TcAhVhD5oKHSt1BVYQFjAIegQIABAC&url=http%3A%2F%2Fweb.pdx.edu%2F~newsomj%2Fcdaclass%2Fho_ordinal%2520regression.pdf&usg=AOvVaw2NRuZfLiLnX4bUfqOPVUne). 
 
-
-We transform Ferritin into $logFerritin = ln(Ferritin)/ln(2)$. With this transformation, an increase in one unit in logFerritin is equivalent to a doubling of Ferritin values. We also center and scale all variables. We also divide age by 5, so a unit increase in the age factor is actually an increase in 5 years in age. We center the data but do not scale it in order to make the coeffs easier to interpret.
+We transform Ferritin into *logFerritin = ln(Ferritin)/ln(2)*. With this transformation, an increase in one unit in logFerritin is equivalent to a doubling of Ferritin values. We also center and scale all variables. We also divide age by 5, so a unit increase in the age factor is actually an increase in 5 years in age. We center the data but do not scale it in order to make the coeffs easier to interpret.
 
 
 ### Ordinality of predictors
@@ -4157,7 +4067,7 @@ ggpairs(ordinal_data_temp,
 
 ##### Assumption checks
 
-The following plot is a visual tool to estimate if the proportional odds assumption is met. For each predictor variable, the assumption is met if the distance between the cross marker and the triangle marker is similar for all levels of the predictor variable. This method is detailed in  [@harrell2015ordinal]  as well as [https://stats.idre.ucla.edu/r/dae/ordinal-logistic-regression/](here). 
+The following plot is a visual tool to estimate if the proportional odds assumption is met. For each predictor variable, the assumption is met if the distance between the cross marker and the triangle marker is similar for all levels of the predictor variable. This method is detailed in  [@harrell2015ordinal]  as well as [here](ttps://stats.idre.ucla.edu/r/dae/ordinal-logistic-regression/). 
 
 
 ```{r}
@@ -4333,15 +4243,13 @@ regress_coeff_health[[1]] <- exp(boot_object$coefficients)
 
 We use brms to run a bayesian fit of the same regression model. We compute LOO to show that adding ferritin does not improve the regression model. 
 
-##### Model fit 
 
-```{r include=FALSE}
+```{r}
 ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status + age +  BMI + log_CRP + smoking +  don_ct + log_last_don  +
              physical_act_daily_n + physical_act_freq_n  + log_Ferritin,  
                    data = ordinal_data_temp,
                    family = cumulative,
                    save_all_pars = TRUE)
-
 ```
 
 
@@ -4393,11 +4301,10 @@ stan_ess(ordinal_fit_B_women$fit)
 
 ##### Model comparison 
 
-Model comparison using Bayes Factors in non trivial when using ordinal models. We use LOO (leave-One-OUt cross validation) as is shown [https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/](here). [@vehtari2017practical] would be the main reference. 
-
+Model comparison using Bayes Factors in non trivial when using ordinal models. We use LOO (leave-One-OUt cross validation) as is shown [here](https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/). [@vehtari2017practical] is the main reference. 
 We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor. 
 
-```{r message=FALSE, warning=FALSE, include=FALSE}
+```{r message=FALSE, warning=FALSE, }
 ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_status + age + BMI +  log_CRP + smoking + don_ct   +
                                  log_last_don + physical_act_daily_n + physical_act_freq_n ,
                    data = ordinal_data_temp,
@@ -4438,9 +4345,8 @@ ordinal_data_temp <-
 
 #### Correlograms
 
-The only strong collinearity is, as expected and known from the previous analyses, between log_Ferritin and don_ct (Nb of donations in the previous two years). 
 
-```{r echo=FALSE}
+```{r}
 
 ggpairs(ordinal_data_temp, 
         columns = c("self_perceived_health", "age", "log_CRP",  "BMI", "don_ct", "log_Ferritin"),
@@ -4476,9 +4382,7 @@ plot(s, which=1:3, pch=1:3, xlab='logit', main=' ', xlim=range(s[,2:4]))
 ```
 
 
-##### Ordinal regression fit (rms package)
-
-We fit the data using the rms R package. 
+##### Ordinal regression fit 
 
 ```{r}
 ordinal_data_temp <-
@@ -4538,9 +4442,9 @@ brm_coeffs %>%
     kable()
 ```
 
-Results show that an increase in 1 point of BMI age results in a 6.7 % decrease in your odds by of feeling in very good pr excellent compared to satisfactory or good. An increase in one scale point in exercise frequency results in an increase of 44% of your odds of felling in excellent health compared to very good, good or satisfactory health. 
+Results show that an increase in 1 point of BMI age results in a `r round(brm_coeffs %>% filter(Regressor == "BMI") %>% magrittr::extract2("Odds.Ratio")-1,3)*-100` % decrease in your odds by of feeling in very good pr excellent compared to satisfactory or good. An increase in one scale point in exercise frequency results in an increase of `r round(brm_coeffs %>% filter(Regressor == "physical_act_freq_n") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% of your odds of felling in excellent health compared to very good, good or satisfactory health. 
 
-Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a 5.8 % increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
+Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a `r round(brm_coeffs %>% filter(Regressor == "log_Ferritin") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
 
 ##### Bootstrapped CIs
 
@@ -4622,13 +4526,7 @@ regress_coeff_health[[2]] <- exp(boot_object$coefficients)
 
 #### Ordinal model Bayesian fit
 
-We use brms to run a bayesian fit of the same regression model.
-
-A staning issue here is that the default coefficient priors for ordinal models in brms are improper priors. Such priors are problematic when later computing Bayes Factor. A better option could be to compute LOO to show that adding ferritin does not improve the model. 
-
-##### Model fit 
-
-```{r include=FALSE}
+```{r}
 ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP + smoking +  don_ct + log_last_don  +
              physical_act_daily_n + physical_act_freq_n  + log_Ferritin,  
                    data = ordinal_data_temp,
@@ -4695,15 +4593,13 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log
 
 ```
 
-```{r}
+```{r message=FALSE, warning=FALSE}
 LOO(ordinal_fit_restricted, ordinal_fit_B_men)
 ```
 
-Adding Ferritin does not improve the model. 
+Adding Ferritin does not improve the fit between the data and the model. 
 
-## Table / Figure
-
-
+## Tables and Figures
 
 
 ## Supplementary Table / Figure
@@ -4711,10 +4607,22 @@ Adding Ferritin does not improve the model.
 ```{r, results='asis'}
 bayes_regression_coeffs_women %>% 
   bind_rows(bayes_regression_coeffs_men) %>% 
+  rename(group = sex) %>% 
   dplyr::select(-coefficient:-Upper, - method) %>% 
   mutate(CI = paste(round(Lower_OR,2), round(Upper_OR,2), sep = "-" )) %>% 
-  dplyr::select(regressor, coefficient_OR, CI ) %>% 
-  stargazer(type = "html", 
+  dplyr::select(group, regressor, coefficient_OR, CI ) %>% 
+  mutate(regressor = dplyr::recode(regressor, age = "Age",
+                       don_ct = "Nb donations (2 years)",
+                       log_CRP = "CRP",
+                       log_Ferritin = "Ferritin",
+                       log_last_don =  "Nb of days since last donation",
+                       menopausal_status = "Menopausal status",
+                       physical_act_daily_n = "Physical activity (daily amount)", 
+                       physical_act_freq_n = "Physical activity (frequency)",
+                       smoking = "Smoking")) %>% 
+  rename(Odds.Ratio = coefficient_OR) %>% 
+  stargazer(title= "Bayesian ordinal logistic regression",
+            type = "html", 
           summary = FALSE, 
           rownames = FALSE,
           header = TRUE,
@@ -4722,9 +4630,6 @@ bayes_regression_coeffs_women %>%
           initial.zero = FALSE, 
           digits = 2)  
 ```
-
-
-
 
 ```{r , results='asis'}
 stargazer(fit_women,fit_men,
@@ -4740,8 +4645,8 @@ stargazer(fit_women,fit_men,
           header = FALSE,
           covariate.labels =c("Health > Good", "Health > y VeGood", "Health > Excellent", "Menopausal status",
                           "Age",  "BMI", "CRP", "Smoking(yes)", "Nb donations (2 years)",
-                          "Nb of days since last donation (log)",
-                        "Physical activity (daily amount)", "Physical activity (frequency)", "Ferritin (log)"),
+                          "Nb of days since last donation",
+                        "Physical activity (daily amount)", "Physical activity (frequency)", "Ferritin"),
           dep.var.caption   = "How has your health been in general?", 
           dep.var.labels.include = FALSE,
           column.labels = c("Women", "Men"),
@@ -4756,7 +4661,14 @@ final_results <- ordinal_regression_coefficients_women %>%
   bind_rows(bayes_regression_coeffs_women, 
             ordinal_regression_coefficients_men,
             bayes_regression_coeffs_men) %>% 
-  filter(regressor == "log_Ferritin") 
+  filter(regressor == "log_Ferritin") %>% 
+  mutate(regressor = "Ferritin") %>% 
+  rename(Odds.Ratio = coefficient_OR,
+         Odds.Ratio.low.CI = Lower_OR,
+         Odds.Ratio.upp.CI = Upper_OR,
+         coeff.low.CI = Lower,
+          coeff.upp.CI = Upper) %>% 
+  dplyr::select(regressor:Odds.Ratio.upp.CI, coefficient,coeff.low.CI,coeff.upp.CI )
   
 ```
 

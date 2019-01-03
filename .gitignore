@@ -1,24 +1,5 @@
-#Ignore everything
-*/*
+#  Data directory
+/data/
 
-#Include .gitignore
-!.gitignore
-
-#Include all code in bin
-!bin/*.R
-
-
-#Include all code in src
-!src/*.R
-!src/*.Rmd
-
-
-#Include documentation
-!results/*.txt
-!results/*.rst
-!results/*.md
-!src/*.md
-!src/*.bib
-
-#Include figures
-!src/index_files/figure-markdown_github/*.png
+# Results directory
+/results/
