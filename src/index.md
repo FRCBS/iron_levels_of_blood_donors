@@ -2,6 +2,13 @@ The effect of donation activity dwarfs the effect of lifestyle, diet and iron su
 ================
 Muriel Lobier
 
+Executive summary
+=================
+
+This document includes all code necessary to run the analysis and produce the figures of : *The effect of donation activity dwarfs the effect of lifestyle, diet and iron supplementation on donor iron status.* Lobier, Nittymäki, Castren, Palokongas, Partanen and Arvas.
+
+The analysis has three parts. In a first part we describe the study population and compute the prevalence of iron deficiency and anemia. In a second part, we use multivariate linear regression to identify the factors that co-vary with iron levels (using ferritin and sTfR) in the blood donor population. In a third part, we test whether ferritin levels affect donor self-reported health using ordinal logistic regression.
+
 ``` r
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
@@ -34,19 +41,10 @@ library(sjlabelled)
 library(lazerhawk)
 ```
 
-Executive summary
-=================
-
-This document includes all code necessary to run the analysis and produce the figures of : The effect of donation activity dwarfs the effect of lifestyle, diet and iron supplementation on donor iron status. Lobier, Nittymäki, Castren, Palokongas, Partanen and Arvas.
-
-The analysis has three parts. In a first part we describe the study population and compute the prevalence of iron deficiency and anemia. In a second part, we use multivariate linear regression to identify the factors that co-vary with iron levels (using ferritin and sTfR) in the blood donor population. In a third part, we test whether ferritin levels affect donor self-reported health using ordinal logistic regression.
-
 Data loading and preparation
 ============================
 
 ``` r
-#Get unaveraged data
-# load("../results/R-objects/r02ss.matbyidsDa.rdata")
 load("../data/r02.fd.bd.all.rdata")
 
 indiv_donations_data <- output
@@ -69,7 +67,7 @@ blood_data_summary <- indiv_donations_data %>%
 
 # Get values for first study donation with the required measurements donation (regardless of donation type)
 # We remove events with no Ferritin and hb_v to be inline with from when the nb of previous donations were counted.
-# More info in datadictionnary.txt
+
 
 blood_values_init <- indiv_donations_data %>% 
   filter(!is.na(Ferritin) & !is.na(Hb_v) ) %>% 
@@ -87,7 +85,6 @@ load("../data/r02ds.donorData.rdata")
 dons <- output
 rm(output)
 
-# There are only 2584 donors in the dons df becasue 2 donors have no FB donations (data_dictionnary.txt)
 
 blood_data_summary <- dons %>%
   inner_join(blood_data_summary, by = "donor") %>%
@@ -174,7 +171,7 @@ blood_data_summary_final <- blood_data_summary_final %>%
 
 ### Donation history
 
-WE remove 41 donors who have not donated previously (They are missing the Nb of days since last FB donation variable)
+We remove 41 donors who have not donated previously (They are missing the Nb of days since last FB donation variable)
 
 ``` r
 new_donors_data <- blood_data_summary_final %>% 
@@ -541,13 +538,9 @@ non_normal_vars <- c("DaysToPreviousFB", "Ferritin", "TransferrinR", "CRP", "BMI
 summary_table <- CreateTableOne(data = blood_data_summary_tbl %>% mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women", 
                                                                                                Post_menopause_women = "Post-menopausal women")) ,
                                 vars = myVars, strata = "group",test = FALSE)
-
-# print(summary_table, nonnormal = non_normal_vars)
 ```
 
 ``` r
-# CreateTableOne(data = blood_data_summary_tbl,  vars = myVars, strata = "group" )
-
 tab3Mat <- print(summary_table, nonnormal = non_normal_vars, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
 
 tab3Mat %>% 
@@ -1767,11 +1760,8 @@ for (excluded_group in levels(blood_data_summary_final$group)){
 ``` r
 all_stat_test <- bind_rows(t_test_norm, t_test_non_norm, chi_sqr_test)
 
-## Apply holm's bonferroni p correction
- 
-
+## Apply holm- bonferroni p correction
 all_stat_test$p.value.adj <- p.adjust(all_stat_test$p.value, method = "holm") 
-
 
 final_p_values <- all_stat_test %>% 
   dplyr::select( -statistic, -p.value) %>% 
@@ -3109,8 +3099,6 @@ plt
 ```
 
 ``` r
-# Create labeller lookup table
-# http://ggplot2.tidyverse.org/reference/labeller.html
 group_labels <- c(
   Pre_menopause_women = "Pre-menopausal women",
   Post_menopause_women = "Post-menopausal women",
@@ -3165,6 +3153,8 @@ blood_data_summary_final %>%
 
 ### Compliance when iron supplementation was provided
 
+We then investigate how much iron was ingested by those donors who reported being offered iron.
+
 ``` r
 blood_data_summary_final %>% 
   filter(iron_supp) %>% 
@@ -3217,9 +3207,9 @@ Results - Regression analyses
 Regressions on sTfR and ferritin
 --------------------------------
 
-We analyzed the data with multiple linear regression. We first ran Ordinary Least Square (OLS) regressions and their diagnostics. If the diagnostics identified problematic observations (e.g., outliers, influential observations), we also ran robust regression regressions (Yu and Yao 2017). Robust regression is less sensitive to infulential observations and gives more accurate estimates of regression coefficients in the presence of problematic observations. Using robust regression leads to a more principled approach to regression analysis and avoids potential confounds introduced by selective removal of influential observations. Robust regression is based on less assumptions and is less sensitive to outliers. As the rlm command from the MASS package does not compute directly the *t* and *p* values, we used the f.robftest function from the sfsmisc package. Practical examples of using robust regression can be found in the literature (Davison et al. 2017).
+We analyzed the data with multiple linear regression. We first ran Ordinary Least Square (OLS) regressions and their diagnostics. If the diagnostics identified problematic observations (e.g., outliers, influential observations), we also ran robust regression regressions (Yu and Yao 2017). Robust regression is based on less assumptions than OLS regression and is less sensitive to influential observations. It gives more accurate estimates of regression coefficients in the presence of problematic observations. Using robust regression leads to a more principled approach to regression analysis and avoids potential confounds introduced by selective removal of influential observations. As the rlm command from the MASS package does not compute directly the *t* and *p* values, we used the f.robftest function from the sfsmisc package. Practical examples of using robust regression can be found in the literature (Davison et al. 2017).
 
-In addition, we used relative importance analysis to estimate tthe average proportion of variance in the outcome variable explained by each co-variate (Groemping 2006). Relative iportance was computed using the pmvd method which assigns 0 to the relative importance of a regressor if it is non significant in the complete model. .
+In addition, we used relative importance analysis to estimate the average proportion of variance in the outcome variable explained by each co-variate (Groemping 2006). Relative iportance was computed using the pmvd method which assigns 0 to the relative importance of a regressor if it is non significant in the complete model. .
 
 The regressors were entered as follows in the regression models for sTfR and ferritin:
 
@@ -3233,7 +3223,7 @@ The regressors were entered as follows in the regression models for sTfR and fer
 -   Iron supplementation
 -   All dietary intake
 
-We compute both coefficients and standardized coefficients (with all dependent and independent variables standardized) for robust regression and only coefficients for OLS regression. We present robust coefficients and their bootstrapped BCa 95% confidence intervals in Table 1 (ferritin) and Table 2 (sTfR), robust standardized coefficients, their bootstrapped distribution and BCa 95% confidence intervals in figure 2.A and non-standardized OLS regression coefficients in Supplementary Table 1 (Ferritin) and 2 (sTfR).
+We compute both coefficients and standardized coefficients (with all dependent and independent variables standardized) for robust regression and only coefficients for OLS regression. We present robust coefficients and their bootstrapped BCa 95% confidence intervals in Table 1 (ferritin) and Table 2 (sTfR), robust standardized coefficients, their bootstrapped distribution and BCa 95% confidence intervals in Figure 2.A and non-standardized OLS regression coefficients in Supplementary Table 1 (Ferritin) and 2 (sTfR).
 
 Pre-processing
 --------------
@@ -3946,7 +3936,7 @@ Results from robust and OLS rergessions are similar. Ferritin levels are positiv
 
 -   A doubling of the number of days since the last donation is associated with a 14.4 % increase in Ferritin levels.
 
--   An additional donation in the previous 2 years is associated with a -5.8 % decrease in Ferritin levels.
+-   An additional donation in the previous 2 years is associated with a 5.8 % decrease in Ferritin levels.
 
 #### Relative importance
 
@@ -3981,7 +3971,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-51-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-50-1.png)
 
 #### OLS
 
@@ -4002,7 +3992,7 @@ autoplot(lm7_pre_menop_sTfR, data = test_data_std, which = c(1:6), ncol = 3, lab
   theme_bw() + theme(legend.position = "none") 
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-53-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-52-1.png)
 
 ``` r
 pre_menop_diag_plot <- autoplot(lm7_pre_menop_sTfR, data = test_data_std, which = c(1:2,6), ncol = 1, 
@@ -4017,7 +4007,7 @@ ggplot2::ggsave("../results/figures/supp_fig_3_pre_menop_sTfR.svg", pre_menop_di
 pre_menop_diag_plot
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-53-2.png)
+![](index_files/figure-markdown_github/unnamed-chunk-52-2.png)
 
 #### Robust regression model amd p-values
 
@@ -4577,9 +4567,11 @@ F Statistic
 </td>
 </tr>
 </table>
+The explained R² is smaller than for Ferritin. Iron supplementation has no significant influence on sTfR levels. The number of donations in the previous two years is negatively correlated with sTfR levels whilst the time since last donation does not have a significant effect.
+
 #### Relative importance
 
-The relative importance analyses are run only on regressors that are consistently significant in at least one demographic group.
+Relative importance analyses are run only on regressors that are consistently significant in at least one demographic group.
 
 ``` r
 test_data_2_std<- test_data_std %>% 
@@ -4644,7 +4636,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-58-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-57-1.png)
 
 ``` r
 ggpairs(test_data_std, 
@@ -4654,7 +4646,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-59-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-58-1.png)
 
 ``` r
 ggpairs(test_data_std, 
@@ -4664,7 +4656,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-60-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-59-1.png)
 
 #### OLS
 
@@ -4686,7 +4678,7 @@ autoplot(lm7_post_menop_std, data = test_data_std, which = c(1:6), ncol = 3,
   theme_bw() + theme(legend.position = "none") 
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-62-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-61-1.png)
 
 ``` r
 post_menop_diag_plot <- autoplot(lm7_post_menop_std, data = test_data_std,
@@ -4702,7 +4694,7 @@ ggplot2::ggsave("../results/figures/supp_fig_3_post_menop.svg", post_menop_diag_
 post_menop_diag_plot
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-62-2.png)
+![](index_files/figure-markdown_github/unnamed-chunk-61-2.png)
 
 There are 4 observations that are seem to be problematic, so we also run robust regressions.
 
@@ -5301,7 +5293,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-66-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-65-1.png)
 
 #### OLS
 
@@ -5325,7 +5317,7 @@ autoplot(lm7_post_menop_sTfR, data = test_data_std, which = c(1:6), ncol = 3,
   theme_bw() + theme(legend.position = "none") 
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-68-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-67-1.png)
 
 ``` r
 post_menop_diag_plot <- autoplot(lm7_post_menop_sTfR, data = test_data_std, which = c(1:2,6), ncol = 1, 
@@ -5339,7 +5331,9 @@ ggplot2::ggsave("../results/figures/supp_fig_3_post_menop_sTfR.svg", post_menop_
 pre_menop_diag_plot
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-68-2.png)
+![](index_files/figure-markdown_github/unnamed-chunk-67-2.png)
+
+There are several problematic observations, so we also run robust regression.
 
 #### Robust regression model and p-values
 
@@ -5899,11 +5893,11 @@ F Statistic
 </td>
 </tr>
 </table>
+The regression R² is only .06, and the overall regression is not significant. Our covariates cannot significantly explain inter-individual variability in sTfR.
+
 #### Relative importance of regressors
 
-we run this only on significant regressors ?
-
-Is very computationally intensive if we run on all 20 predictors... So we only run the predictors that were significant in at least one of the donor groups.
+This analysis is run only on regressors that are consistently significant in at least one demographic group.
 
 ``` r
 test_data_2_std<- test_data_std %>% 
@@ -5965,7 +5959,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-73-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-72-1.png)
 
 ``` r
 ggpairs(test_data_std, 
@@ -5975,7 +5969,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-74-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-73-1.png)
 
 ``` r
 ggpairs(test_data_std, 
@@ -5985,7 +5979,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-75-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-74-1.png)
 
 #### OLS
 
@@ -6006,7 +6000,7 @@ autoplot(lm7_men_std, data = test_data_std, which = c(1:6), ncol = 3,  label.n =
   theme_bw() + theme(legend.position = "none") 
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-77-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-76-1.png)
 
 ``` r
   men_diag_plot <- autoplot(lm7_men_std, data = test_data_std, which = c(1:2,6), ncol = 1, 
@@ -6020,7 +6014,9 @@ autoplot(lm7_men_std, data = test_data_std, which = c(1:6), ncol = 3,  label.n =
 men_diag_plot
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-77-2.png)
+![](index_files/figure-markdown_github/unnamed-chunk-76-2.png)
+
+There are seevral problemetic observations, so we also run robust regressions.
 
 #### Robust regression model and p-values
 
@@ -6558,7 +6554,7 @@ F Statistic
 </td>
 </tr>
 </table>
-Results from robust and OLS rergessions are similar. In both models, ferritin levels are positively correlated with age, BMI, nb of days since last donation, red meat consumption as well as Beer and wine consumption (would not survive multiple comparison correction). and wine consumption (which would not survive multiple correction). Ferritin levels are negatively correlated with the number of donations and iron supplementation. A significant negative corelation with the nb of donations squared indicates that the effect of nb of donations is larger for small numbers of donations than for large number of donations.
+Results from robust and OLS regressions are similar. In both models, ferritin levels are positively correlated with age, BMI, nb of days since last donation, red meat consumption as well as Beer and wine consumption (would not survive multiple comparison correction). and wine consumption (which would not survive multiple correction). Ferritin levels are negatively correlated with the number of donations and iron supplementation. A significant negative corelation with the nb of donations squared indicates that the effect of nb of donations is larger for small numbers of donations than for large number of donations.
 
 -   An increase in 5 years of age is associated with a 2.3 % increase in Ferritin levels.
 
@@ -6600,7 +6596,7 @@ ggpairs(test_data_std,
         progress = FALSE)
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-81-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-80-1.png)
 
 #### OLS
 
@@ -6626,7 +6622,7 @@ autoplot(lm7_men_sTfR, data = test_data_std,
   theme_bw() + theme(legend.position = "none") 
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-83-1.png)
+![](index_files/figure-markdown_github/unnamed-chunk-82-1.png)
 
 ``` r
 post_menop_diag_plot <- autoplot(lm7_men_sTfR, data = test_data_std, which = c(1:2,6), ncol = 1, 
@@ -6641,7 +6637,7 @@ ggplot2::ggsave("../results/figures/supp_fig_3_men_sTfR.svg", post_menop_diag_pl
 pre_menop_diag_plot
 ```
 
-![](index_files/figure-markdown_github/unnamed-chunk-83-2.png)
+![](index_files/figure-markdown_github/unnamed-chunk-82-2.png)
 
 #### Robust regression model and p-values
 
@@ -7178,6 +7174,8 @@ F Statistic
 </td>
 </tr>
 </table>
+The R² is smaller than the one obtained for ferritin for the same demographic group. Nb of donations in the last two years but not time since last donations significantly co-varies with sTfR.
+
 #### Relative importance
 
 ``` r
@@ -8088,54 +8086,600 @@ stargazer(robust_mdl_pre_menop_w, robust_mdl_post_menop_w, robust_mdl_men,
           digits = 3)
 ```
 
-    ## 
-    ## <table style="text-align:center"><caption><strong>Table 2 - Multivariate robust regression analyses - Ferritin</strong></caption>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"></td><td colspan="3">Ferritin (log)</td></tr>
-    ## <tr><td></td><td colspan="3" style="border-bottom: 1px solid black"></td></tr>
-    ## <tr><td style="text-align:left"></td><td>Pre-menopausal women</td><td>Post-menopausal women</td><td>Men</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Age</td><td>0.073 (0.042, 0.103)</td><td>0.047 (-0.003, 0.097)</td><td>0.023 (0.006, 0.038)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.072</td><td>p = 0.004</td></tr>
-    ## <tr><td style="text-align:left">BMI</td><td>0.017 (0.007, 0.027)</td><td>0.018 (0.005, 0.031)</td><td>0.037 (0.026, 0.047)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.0005</td><td>p = 0.006</td><td>p = 0.000</td></tr>
-    ## <tr><td style="text-align:left">ln(CRP)</td><td>0.063 (-0.078, 0.208)</td><td>0.062 (-0.181, 0.290)</td><td>-0.015 (-0.256, 0.187)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.367</td><td>p = 0.601</td><td>p = 0.883</td></tr>
-    ## <tr><td style="text-align:left">Smoking(yes)</td><td>0.091 (0.001, 0.176)</td><td>0.077 (-0.064, 0.202)</td><td>0.076 (-0.012, 0.163)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.047</td><td>p = 0.273</td><td>p = 0.080</td></tr>
-    ## <tr><td style="text-align:left">Pregnancy(Yes)</td><td>0.020 (-0.064, 0.104)</td><td>-0.004 (-0.094, 0.081)</td><td></td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.649</td><td>p = 0.929</td><td></td></tr>
-    ## <tr><td style="text-align:left">Nb donations (2 years)</td><td>-0.060 (-0.097, -0.022)</td><td>-0.034 (-0.071, 0.007)</td><td>-0.089 (-0.110, -0.069)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.002</td><td>p = 0.105</td><td>p = 0.000</td></tr>
-    ## <tr><td style="text-align:left">(Nb donations (2 years))²</td><td>0.010 (-0.005, 0.026)</td><td>0.006 (-0.012, 0.023)</td><td>0.007 (0.002, 0.012)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.165</td><td>p = 0.450</td><td>p = 0.004</td></tr>
-    ## <tr><td style="text-align:left">ln(Days since last donation)</td><td>0.134 (0.082, 0.190)</td><td>0.231 (0.157, 0.308)</td><td>0.165 (0.121, 0.211)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.000</td><td>p = 0.000</td></tr>
-    ## <tr><td style="text-align:left">iron supplementation</td><td>-0.002 (-0.034, 0.029)</td><td>-0.017 (-0.062, 0.027)</td><td>-0.045 (-0.079, -0.013)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.895</td><td>p = 0.450</td><td>p = 0.005</td></tr>
-    ## <tr><td style="text-align:left">Red meat</td><td>0.134 (0.081, 0.188)</td><td>0.113 (0.035, 0.188)</td><td>0.098 (0.043, 0.155)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.006</td><td>p = 0.001</td></tr>
-    ## <tr><td style="text-align:left">Vegetables</td><td>-0.013 (-0.128, 0.104)</td><td>0.025 (-0.113, 0.167)</td><td>0.031 (-0.049, 0.104)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.822</td><td>p = 0.735</td><td>p = 0.433</td></tr>
-    ## <tr><td style="text-align:left">Fruit and Berries</td><td>0.031 (-0.065, 0.131)</td><td>-0.142 (-0.271, 0.001)</td><td>0.011 (-0.055, 0.079)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.505</td><td>p = 0.034</td><td>p = 0.737</td></tr>
-    ## <tr><td style="text-align:left">Milk</td><td>-0.057 (-0.113, -0.004)</td><td>-0.039 (-0.107, 0.032)</td><td>-0.036 (-0.078, 0.006)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.038</td><td>p = 0.269</td><td>p = 0.120</td></tr>
-    ## <tr><td style="text-align:left">Fruit Juices</td><td>-0.004 (-0.057, 0.049)</td><td>-0.001 (-0.057, 0.053)</td><td>-0.018 (-0.061, 0.023)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.889</td><td>p = 0.959</td><td>p = 0.373</td></tr>
-    ## <tr><td style="text-align:left">Coffee</td><td>0.019 (-0.019, 0.058)</td><td>-0.003 (-0.066, 0.062)</td><td>0.013 (-0.027, 0.053)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.347</td><td>p = 0.915</td><td>p = 0.484</td></tr>
-    ## <tr><td style="text-align:left">Tea</td><td>-0.029 (-0.073, 0.013)</td><td>0.043 (-0.008, 0.095)</td><td>0.011 (-0.025, 0.045)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.185</td><td>p = 0.112</td><td>p = 0.563</td></tr>
-    ## <tr><td style="text-align:left">Beer</td><td>0.012 (-0.059, 0.084)</td><td>0.084 (-0.0001, 0.174)</td><td>0.050 (0.0004, 0.101)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.740</td><td>p = 0.046</td><td>p = 0.044</td></tr>
-    ## <tr><td style="text-align:left">Wine</td><td>0.060 (-0.014, 0.135)</td><td>0.080 (-0.001, 0.157)</td><td>0.061 (0.003, 0.122)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.098</td><td>p = 0.034</td><td>p = 0.040</td></tr>
-    ## <tr><td style="text-align:left">Liquor</td><td>0.001 (-0.112, 0.108)</td><td>-0.071 (-0.243, 0.070)</td><td>0.056 (-0.015, 0.129)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.983</td><td>p = 0.410</td><td>p = 0.113</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Observations</td><td>846</td><td>452</td><td>902</td></tr>
-    ## <tr><td style="text-align:left">Residual Std. Error</td><td>0.612 (df = 826)</td><td>0.530 (df = 432)</td><td>0.517 (df = 883)</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"><em>Note:</em></td><td colspan="3" style="text-align:right"><sup>*</sup>p<0.1; <sup>**</sup>p<0.05; <sup>***</sup>p<0.01</td></tr>
-    ## </table>
-
+<table style="text-align:center">
+<caption>
+<strong>Table 2 - Multivariate robust regression analyses - Ferritin</strong>
+</caption>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td colspan="3">
+Ferritin (log)
+</td>
+</tr>
+<tr>
+<td>
+</td>
+<td colspan="3" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+Pre-menopausal women
+</td>
+<td>
+Post-menopausal women
+</td>
+<td>
+Men
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Age
+</td>
+<td>
+0.073 (0.042, 0.103)
+</td>
+<td>
+0.047 (-0.003, 0.097)
+</td>
+<td>
+0.023 (0.006, 0.038)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.00000
+</td>
+<td>
+p = 0.072
+</td>
+<td>
+p = 0.004
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+BMI
+</td>
+<td>
+0.017 (0.007, 0.027)
+</td>
+<td>
+0.018 (0.005, 0.031)
+</td>
+<td>
+0.037 (0.026, 0.047)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.0005
+</td>
+<td>
+p = 0.006
+</td>
+<td>
+p = 0.000
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+ln(CRP)
+</td>
+<td>
+0.063 (-0.078, 0.208)
+</td>
+<td>
+0.062 (-0.181, 0.290)
+</td>
+<td>
+-0.015 (-0.256, 0.187)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.367
+</td>
+<td>
+p = 0.601
+</td>
+<td>
+p = 0.883
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Smoking(yes)
+</td>
+<td>
+0.091 (0.001, 0.176)
+</td>
+<td>
+0.077 (-0.064, 0.202)
+</td>
+<td>
+0.076 (-0.012, 0.163)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.047
+</td>
+<td>
+p = 0.273
+</td>
+<td>
+p = 0.080
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Pregnancy(Yes)
+</td>
+<td>
+0.020 (-0.064, 0.104)
+</td>
+<td>
+-0.004 (-0.094, 0.081)
+</td>
+<td>
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.649
+</td>
+<td>
+p = 0.929
+</td>
+<td>
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Nb donations (2 years)
+</td>
+<td>
+-0.060 (-0.097, -0.022)
+</td>
+<td>
+-0.034 (-0.071, 0.007)
+</td>
+<td>
+-0.089 (-0.110, -0.069)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.002
+</td>
+<td>
+p = 0.105
+</td>
+<td>
+p = 0.000
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+(Nb donations (2 years))²
+</td>
+<td>
+0.010 (-0.005, 0.026)
+</td>
+<td>
+0.006 (-0.012, 0.023)
+</td>
+<td>
+0.007 (0.002, 0.012)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.165
+</td>
+<td>
+p = 0.450
+</td>
+<td>
+p = 0.004
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+ln(Days since last donation)
+</td>
+<td>
+0.134 (0.082, 0.190)
+</td>
+<td>
+0.231 (0.157, 0.308)
+</td>
+<td>
+0.165 (0.121, 0.211)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.00000
+</td>
+<td>
+p = 0.000
+</td>
+<td>
+p = 0.000
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+iron supplementation
+</td>
+<td>
+-0.002 (-0.034, 0.029)
+</td>
+<td>
+-0.017 (-0.062, 0.027)
+</td>
+<td>
+-0.045 (-0.079, -0.013)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.895
+</td>
+<td>
+p = 0.450
+</td>
+<td>
+p = 0.005
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Red meat
+</td>
+<td>
+0.134 (0.081, 0.188)
+</td>
+<td>
+0.113 (0.035, 0.188)
+</td>
+<td>
+0.098 (0.043, 0.155)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.00000
+</td>
+<td>
+p = 0.006
+</td>
+<td>
+p = 0.001
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Vegetables
+</td>
+<td>
+-0.013 (-0.128, 0.104)
+</td>
+<td>
+0.025 (-0.113, 0.167)
+</td>
+<td>
+0.031 (-0.049, 0.104)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.822
+</td>
+<td>
+p = 0.735
+</td>
+<td>
+p = 0.433
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Fruit and Berries
+</td>
+<td>
+0.031 (-0.065, 0.131)
+</td>
+<td>
+-0.142 (-0.271, 0.001)
+</td>
+<td>
+0.011 (-0.055, 0.079)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.505
+</td>
+<td>
+p = 0.034
+</td>
+<td>
+p = 0.737
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Milk
+</td>
+<td>
+-0.057 (-0.113, -0.004)
+</td>
+<td>
+-0.039 (-0.107, 0.032)
+</td>
+<td>
+-0.036 (-0.078, 0.006)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.038
+</td>
+<td>
+p = 0.269
+</td>
+<td>
+p = 0.120
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Fruit Juices
+</td>
+<td>
+-0.004 (-0.057, 0.049)
+</td>
+<td>
+-0.001 (-0.057, 0.053)
+</td>
+<td>
+-0.018 (-0.061, 0.023)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.889
+</td>
+<td>
+p = 0.959
+</td>
+<td>
+p = 0.373
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Coffee
+</td>
+<td>
+0.019 (-0.019, 0.058)
+</td>
+<td>
+-0.003 (-0.066, 0.062)
+</td>
+<td>
+0.013 (-0.027, 0.053)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.347
+</td>
+<td>
+p = 0.915
+</td>
+<td>
+p = 0.484
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Tea
+</td>
+<td>
+-0.029 (-0.073, 0.013)
+</td>
+<td>
+0.043 (-0.008, 0.095)
+</td>
+<td>
+0.011 (-0.025, 0.045)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.185
+</td>
+<td>
+p = 0.112
+</td>
+<td>
+p = 0.563
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Beer
+</td>
+<td>
+0.012 (-0.059, 0.084)
+</td>
+<td>
+0.084 (-0.0001, 0.174)
+</td>
+<td>
+0.050 (0.0004, 0.101)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.740
+</td>
+<td>
+p = 0.046
+</td>
+<td>
+p = 0.044
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Wine
+</td>
+<td>
+0.060 (-0.014, 0.135)
+</td>
+<td>
+0.080 (-0.001, 0.157)
+</td>
+<td>
+0.061 (0.003, 0.122)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.098
+</td>
+<td>
+p = 0.034
+</td>
+<td>
+p = 0.040
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Liquor
+</td>
+<td>
+0.001 (-0.112, 0.108)
+</td>
+<td>
+-0.071 (-0.243, 0.070)
+</td>
+<td>
+0.056 (-0.015, 0.129)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.983
+</td>
+<td>
+p = 0.410
+</td>
+<td>
+p = 0.113
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Observations
+</td>
+<td>
+846
+</td>
+<td>
+452
+</td>
+<td>
+902
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Residual Std. Error
+</td>
+<td>
+0.612 (df = 826)
+</td>
+<td>
+0.530 (df = 432)
+</td>
+<td>
+0.517 (df = 883)
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+<em>Note:</em>
+</td>
+<td colspan="3" style="text-align:right">
+<sup>*</sup>p&lt;0.1; <sup>**</sup>p&lt;0.05; <sup>***</sup>p&lt;0.01
+</td>
+</tr>
+</table>
 ``` r
 stargazer(robust_mdl_pre_menop_w, robust_mdl_post_menop_w, robust_mdl_men,
           style = "all", 
@@ -8757,6 +9301,8 @@ Residual Std. Error
 </td>
 </tr>
 </table>
+-   
+
 #### Table 3 - Outcome = sTfR
 
 ``` r
@@ -8781,8 +9327,6 @@ robust_p_values_sTfR[[3]] = p_matrix
 ```
 
 ``` r
-# SAve output to file
-
 stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_sTfR_men,
           out = "../results/tables/table_3_robust_regressions_complete__values.html",
           style = "all", 
@@ -8808,54 +9352,600 @@ stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_
           digits = 3)
 ```
 
-    ## 
-    ## <table style="text-align:center"><caption><strong>Table 3 - Multivariable robust regression analyses - sTfR</strong></caption>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"></td><td colspan="3">sTfR (log)</td></tr>
-    ## <tr><td></td><td colspan="3" style="border-bottom: 1px solid black"></td></tr>
-    ## <tr><td style="text-align:left"></td><td>Pre-menopausal women</td><td>Post-menopausal women</td><td>Men</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Age</td><td>-0.028 (-0.044, -0.013)</td><td>0.001 (-0.025, 0.026)</td><td>-0.009 (-0.017, -0.0002)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.072</td><td>p = 0.004</td></tr>
-    ## <tr><td style="text-align:left">BMI</td><td>0.003 (-0.001, 0.008)</td><td>0.001 (-0.006, 0.007)</td><td>0.003 (-0.002, 0.008)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.0005</td><td>p = 0.006</td><td>p = 0.000</td></tr>
-    ## <tr><td style="text-align:left">ln(CRP)</td><td>0.026 (-0.042, 0.092)</td><td>0.049 (-0.059, 0.141)</td><td>0.110 (0.011, 0.202)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.367</td><td>p = 0.601</td><td>p = 0.883</td></tr>
-    ## <tr><td style="text-align:left">Smoking(yes)</td><td>-0.048 (-0.094, -0.003)</td><td>-0.065 (-0.133, 0.001)</td><td>-0.054 (-0.097, -0.011)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.047</td><td>p = 0.273</td><td>p = 0.080</td></tr>
-    ## <tr><td style="text-align:left">Pregnancy(Yes)</td><td>0.020 (-0.027, 0.068)</td><td>-0.036 (-0.080, 0.009)</td><td></td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.649</td><td>p = 0.929</td><td></td></tr>
-    ## <tr><td style="text-align:left">Nb donations (2 years)</td><td>0.025 (0.007, 0.044)</td><td>-0.007 (-0.028, 0.015)</td><td>0.020 (0.009, 0.030)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.002</td><td>p = 0.105</td><td>p = 0.000</td></tr>
-    ## <tr><td style="text-align:left">(Nb donations (2 years))²</td><td>-0.006 (-0.013, 0.002)</td><td>0.002 (-0.007, 0.010)</td><td>0.0001 (-0.002, 0.003)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.165</td><td>p = 0.450</td><td>p = 0.004</td></tr>
-    ## <tr><td style="text-align:left">ln(Days since last donation)</td><td>-0.019 (-0.045, 0.006)</td><td>-0.048 (-0.086, -0.009)</td><td>-0.019 (-0.043, 0.003)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.000</td><td>p = 0.000</td></tr>
-    ## <tr><td style="text-align:left">iron supplementation</td><td>0.001 (-0.015, 0.017)</td><td>0.001 (-0.021, 0.023)</td><td>0.012 (-0.005, 0.029)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.895</td><td>p = 0.450</td><td>p = 0.005</td></tr>
-    ## <tr><td style="text-align:left">Red meat</td><td>-0.075 (-0.103, -0.047)</td><td>0.004 (-0.032, 0.043)</td><td>-0.027 (-0.057, 0.005)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.006</td><td>p = 0.001</td></tr>
-    ## <tr><td style="text-align:left">Vegetables</td><td>-0.018 (-0.076, 0.043)</td><td>-0.005 (-0.072, 0.062)</td><td>-0.022 (-0.064, 0.022)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.822</td><td>p = 0.735</td><td>p = 0.433</td></tr>
-    ## <tr><td style="text-align:left">Fruit and Berries</td><td>0.008 (-0.038, 0.054)</td><td>-0.007 (-0.069, 0.060)</td><td>-0.002 (-0.041, 0.034)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.505</td><td>p = 0.034</td><td>p = 0.737</td></tr>
-    ## <tr><td style="text-align:left">Milk</td><td>0.040 (0.013, 0.068)</td><td>0.039 (0.003, 0.073)</td><td>0.019 (-0.007, 0.045)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.038</td><td>p = 0.269</td><td>p = 0.120</td></tr>
-    ## <tr><td style="text-align:left">Fruit Juices</td><td>-0.002 (-0.029, 0.026)</td><td>0.006 (-0.023, 0.036)</td><td>0.005 (-0.017, 0.027)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.889</td><td>p = 0.959</td><td>p = 0.373</td></tr>
-    ## <tr><td style="text-align:left">Coffee</td><td>-0.038 (-0.058, -0.017)</td><td>-0.016 (-0.047, 0.018)</td><td>-0.009 (-0.032, 0.012)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.347</td><td>p = 0.915</td><td>p = 0.484</td></tr>
-    ## <tr><td style="text-align:left">Tea</td><td>0.004 (-0.019, 0.026)</td><td>-0.003 (-0.030, 0.023)</td><td>0.001 (-0.019, 0.020)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.185</td><td>p = 0.112</td><td>p = 0.563</td></tr>
-    ## <tr><td style="text-align:left">Beer</td><td>0.003 (-0.033, 0.037)</td><td>-0.020 (-0.063, 0.024)</td><td>-0.019 (-0.045, 0.008)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.740</td><td>p = 0.046</td><td>p = 0.044</td></tr>
-    ## <tr><td style="text-align:left">Wine</td><td>-0.013 (-0.048, 0.019)</td><td>-0.040 (-0.078, -0.004)</td><td>-0.029 (-0.059, 0.0001)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.098</td><td>p = 0.034</td><td>p = 0.040</td></tr>
-    ## <tr><td style="text-align:left">Liquor</td><td>0.034 (-0.019, 0.088)</td><td>-0.001 (-0.082, 0.080)</td><td>0.012 (-0.027, 0.048)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.983</td><td>p = 0.410</td><td>p = 0.113</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Observations</td><td>846</td><td>452</td><td>902</td></tr>
-    ## <tr><td style="text-align:left">Residual Std. Error</td><td>0.302 (df = 826)</td><td>0.290 (df = 432)</td><td>0.281 (df = 883)</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"><em>Note:</em></td><td colspan="3" style="text-align:right"><sup>*</sup>p<0.1; <sup>**</sup>p<0.05; <sup>***</sup>p<0.01</td></tr>
-    ## </table>
-
+<table style="text-align:center">
+<caption>
+<strong>Table 3 - Multivariable robust regression analyses - sTfR</strong>
+</caption>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td colspan="3">
+sTfR (log)
+</td>
+</tr>
+<tr>
+<td>
+</td>
+<td colspan="3" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+Pre-menopausal women
+</td>
+<td>
+Post-menopausal women
+</td>
+<td>
+Men
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Age
+</td>
+<td>
+-0.028 (-0.044, -0.013)
+</td>
+<td>
+0.001 (-0.025, 0.026)
+</td>
+<td>
+-0.009 (-0.017, -0.0002)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.00000
+</td>
+<td>
+p = 0.072
+</td>
+<td>
+p = 0.004
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+BMI
+</td>
+<td>
+0.003 (-0.001, 0.008)
+</td>
+<td>
+0.001 (-0.006, 0.007)
+</td>
+<td>
+0.003 (-0.002, 0.008)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.0005
+</td>
+<td>
+p = 0.006
+</td>
+<td>
+p = 0.000
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+ln(CRP)
+</td>
+<td>
+0.026 (-0.042, 0.092)
+</td>
+<td>
+0.049 (-0.059, 0.141)
+</td>
+<td>
+0.110 (0.011, 0.202)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.367
+</td>
+<td>
+p = 0.601
+</td>
+<td>
+p = 0.883
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Smoking(yes)
+</td>
+<td>
+-0.048 (-0.094, -0.003)
+</td>
+<td>
+-0.065 (-0.133, 0.001)
+</td>
+<td>
+-0.054 (-0.097, -0.011)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.047
+</td>
+<td>
+p = 0.273
+</td>
+<td>
+p = 0.080
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Pregnancy(Yes)
+</td>
+<td>
+0.020 (-0.027, 0.068)
+</td>
+<td>
+-0.036 (-0.080, 0.009)
+</td>
+<td>
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.649
+</td>
+<td>
+p = 0.929
+</td>
+<td>
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Nb donations (2 years)
+</td>
+<td>
+0.025 (0.007, 0.044)
+</td>
+<td>
+-0.007 (-0.028, 0.015)
+</td>
+<td>
+0.020 (0.009, 0.030)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.002
+</td>
+<td>
+p = 0.105
+</td>
+<td>
+p = 0.000
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+(Nb donations (2 years))²
+</td>
+<td>
+-0.006 (-0.013, 0.002)
+</td>
+<td>
+0.002 (-0.007, 0.010)
+</td>
+<td>
+0.0001 (-0.002, 0.003)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.165
+</td>
+<td>
+p = 0.450
+</td>
+<td>
+p = 0.004
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+ln(Days since last donation)
+</td>
+<td>
+-0.019 (-0.045, 0.006)
+</td>
+<td>
+-0.048 (-0.086, -0.009)
+</td>
+<td>
+-0.019 (-0.043, 0.003)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.00000
+</td>
+<td>
+p = 0.000
+</td>
+<td>
+p = 0.000
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+iron supplementation
+</td>
+<td>
+0.001 (-0.015, 0.017)
+</td>
+<td>
+0.001 (-0.021, 0.023)
+</td>
+<td>
+0.012 (-0.005, 0.029)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.895
+</td>
+<td>
+p = 0.450
+</td>
+<td>
+p = 0.005
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Red meat
+</td>
+<td>
+-0.075 (-0.103, -0.047)
+</td>
+<td>
+0.004 (-0.032, 0.043)
+</td>
+<td>
+-0.027 (-0.057, 0.005)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.00000
+</td>
+<td>
+p = 0.006
+</td>
+<td>
+p = 0.001
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Vegetables
+</td>
+<td>
+-0.018 (-0.076, 0.043)
+</td>
+<td>
+-0.005 (-0.072, 0.062)
+</td>
+<td>
+-0.022 (-0.064, 0.022)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.822
+</td>
+<td>
+p = 0.735
+</td>
+<td>
+p = 0.433
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Fruit and Berries
+</td>
+<td>
+0.008 (-0.038, 0.054)
+</td>
+<td>
+-0.007 (-0.069, 0.060)
+</td>
+<td>
+-0.002 (-0.041, 0.034)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.505
+</td>
+<td>
+p = 0.034
+</td>
+<td>
+p = 0.737
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Milk
+</td>
+<td>
+0.040 (0.013, 0.068)
+</td>
+<td>
+0.039 (0.003, 0.073)
+</td>
+<td>
+0.019 (-0.007, 0.045)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.038
+</td>
+<td>
+p = 0.269
+</td>
+<td>
+p = 0.120
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Fruit Juices
+</td>
+<td>
+-0.002 (-0.029, 0.026)
+</td>
+<td>
+0.006 (-0.023, 0.036)
+</td>
+<td>
+0.005 (-0.017, 0.027)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.889
+</td>
+<td>
+p = 0.959
+</td>
+<td>
+p = 0.373
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Coffee
+</td>
+<td>
+-0.038 (-0.058, -0.017)
+</td>
+<td>
+-0.016 (-0.047, 0.018)
+</td>
+<td>
+-0.009 (-0.032, 0.012)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.347
+</td>
+<td>
+p = 0.915
+</td>
+<td>
+p = 0.484
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Tea
+</td>
+<td>
+0.004 (-0.019, 0.026)
+</td>
+<td>
+-0.003 (-0.030, 0.023)
+</td>
+<td>
+0.001 (-0.019, 0.020)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.185
+</td>
+<td>
+p = 0.112
+</td>
+<td>
+p = 0.563
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Beer
+</td>
+<td>
+0.003 (-0.033, 0.037)
+</td>
+<td>
+-0.020 (-0.063, 0.024)
+</td>
+<td>
+-0.019 (-0.045, 0.008)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.740
+</td>
+<td>
+p = 0.046
+</td>
+<td>
+p = 0.044
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Wine
+</td>
+<td>
+-0.013 (-0.048, 0.019)
+</td>
+<td>
+-0.040 (-0.078, -0.004)
+</td>
+<td>
+-0.029 (-0.059, 0.0001)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.098
+</td>
+<td>
+p = 0.034
+</td>
+<td>
+p = 0.040
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Liquor
+</td>
+<td>
+0.034 (-0.019, 0.088)
+</td>
+<td>
+-0.001 (-0.082, 0.080)
+</td>
+<td>
+0.012 (-0.027, 0.048)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.983
+</td>
+<td>
+p = 0.410
+</td>
+<td>
+p = 0.113
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Observations
+</td>
+<td>
+846
+</td>
+<td>
+452
+</td>
+<td>
+902
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Residual Std. Error
+</td>
+<td>
+0.302 (df = 826)
+</td>
+<td>
+0.290 (df = 432)
+</td>
+<td>
+0.281 (df = 883)
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+<em>Note:</em>
+</td>
+<td colspan="3" style="text-align:right">
+<sup>*</sup>p&lt;0.1; <sup>**</sup>p&lt;0.05; <sup>***</sup>p&lt;0.01
+</td>
+</tr>
+</table>
 ``` r
 stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_sTfR_men,
           style = "all", 
@@ -9477,11 +10567,15 @@ Residual Std. Error
 </td>
 </tr>
 </table>
+-   
+
 #### Figure 2
 
 ##### Bootstrapped coeffs
 
 The bootstrapped coefficients that are displayed are the standardized coefficients.
+
+###### Ferritin
 
 ``` r
 bootstrap_distrib_robust_std %>% 
@@ -9523,6 +10617,8 @@ bootstrap_distrib_robust_std %>%
 ``` r
 ggplot2::ggsave("../results/figures/Figure_2_coeffs_Ferritin.png",device = "png", height = 17, width = 6.75, units = "cm" )
 ```
+
+###### sTfR
 
 ``` r
 test <- bootstrap_distrib_robust_std_sTfR %>% 
@@ -9712,7 +10808,7 @@ plt <- relativ_impo_data_sTfR %>%
         strip.text = element_text(face="bold", size = 8*1.333333), # weird sizing issue ...
         axis.line = element_line(colour="black"),
         axis.title.y = element_blank(),
-        axis.title.x = element_text(size = 8*1.3333),,
+        axis.title.x = element_text(size = 8*1.3333),
         axis.text = element_text(size = 6*1.333333),
         panel.grid.major.y = element_blank()) +
   ylab("Average percentage of explained \nvariance (pmvd)")
@@ -10525,6 +11621,8 @@ F Statistic
 </td>
 </tr>
 </table>
+-   
+
 ### Supp Table 2: Regression of sTfR
 
 ``` r
@@ -10551,56 +11649,643 @@ stargazer(lm7_pre_menop_sTfR, lm7_post_menop_sTfR,lm7_men_sTfR,
           digits = 3)
 ```
 
-    ## 
-    ## <table style="text-align:center"><caption><strong>Supplementary Table 3 - Multivariable linear regression Analyses (sTfR)</strong></caption>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"></td><td colspan="3">sTfR (log)</td></tr>
-    ## <tr><td></td><td colspan="3" style="border-bottom: 1px solid black"></td></tr>
-    ## <tr><td style="text-align:left"></td><td>Pre-menopausal women</td><td>Post-menopausal women</td><td>Men</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Age</td><td>-0.027 (-0.042, -0.011)</td><td>-0.002 (-0.026, 0.022)</td><td>-0.010 (-0.018, -0.002)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.0004</td><td>p = 0.892</td><td>p = 0.016</td></tr>
-    ## <tr><td style="text-align:left">BMI</td><td>0.003 (-0.001, 0.007)</td><td>0.001 (-0.005, 0.007)</td><td>0.004 (-0.001, 0.009)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.207</td><td>p = 0.728</td><td>p = 0.128</td></tr>
-    ## <tr><td style="text-align:left">CRP</td><td>0.030 (-0.031, 0.095)</td><td>0.041 (-0.068, 0.136)</td><td>0.119 (0.025, 0.211)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.389</td><td>p = 0.488</td><td>p = 0.026</td></tr>
-    ## <tr><td style="text-align:left">Smoking(yes)</td><td>-0.048 (-0.092, -0.005)</td><td>-0.071 (-0.138, -0.009)</td><td>-0.055 (-0.099, -0.012)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.037</td><td>p = 0.045</td><td>p = 0.018</td></tr>
-    ## <tr><td style="text-align:left">Pregnancy(Yes)</td><td>0.013 (-0.032, 0.059)</td><td>-0.033 (-0.077, 0.012)</td><td></td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.559</td><td>p = 0.153</td><td></td></tr>
-    ## <tr><td style="text-align:left">Nb donations (2 years)</td><td>0.025 (0.006, 0.043)</td><td>-0.002 (-0.023, 0.018)</td><td>0.022 (0.012, 0.033)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.011</td><td>p = 0.851</td><td>p = 0.00003</td></tr>
-    ## <tr><td style="text-align:left">(Nb donations (2 years))²</td><td>-0.004 (-0.012, 0.003)</td><td>0.001 (-0.008, 0.009)</td><td>-0.0002 (-0.003, 0.002)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.241</td><td>p = 0.865</td><td>p = 0.888</td></tr>
-    ## <tr><td style="text-align:left">Days since last donation</td><td>-0.021 (-0.046, 0.004)</td><td>-0.043 (-0.079, -0.005)</td><td>-0.015 (-0.037, 0.008)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.125</td><td>p = 0.029</td><td>p = 0.204</td></tr>
-    ## <tr><td style="text-align:left">iron supplementation</td><td>0.002 (-0.013, 0.018)</td><td>0.005 (-0.016, 0.026)</td><td>0.014 (-0.002, 0.031)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.801</td><td>p = 0.637</td><td>p = 0.094</td></tr>
-    ## <tr><td style="text-align:left">Red meat</td><td>-0.068 (-0.094, -0.040)</td><td>-0.0003 (-0.037, 0.039)</td><td>-0.031 (-0.060, -0.001)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.00000</td><td>p = 0.990</td><td>p = 0.048</td></tr>
-    ## <tr><td style="text-align:left">Vegetables</td><td>-0.020 (-0.076, 0.037)</td><td>-0.001 (-0.065, 0.067)</td><td>-0.015 (-0.058, 0.030)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.470</td><td>p = 0.984</td><td>p = 0.466</td></tr>
-    ## <tr><td style="text-align:left">Fruit and Berries</td><td>0.009 (-0.037, 0.054)</td><td>0.005 (-0.058, 0.068)</td><td>-0.004 (-0.043, 0.033)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.694</td><td>p = 0.871</td><td>p = 0.826</td></tr>
-    ## <tr><td style="text-align:left">Milk</td><td>0.041 (0.014, 0.067)</td><td>0.032 (-0.003, 0.064)</td><td>0.015 (-0.010, 0.040)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.004</td><td>p = 0.073</td><td>p = 0.218</td></tr>
-    ## <tr><td style="text-align:left">Fruit Juices</td><td>-0.003 (-0.030, 0.024)</td><td>0.005 (-0.024, 0.034)</td><td>0.006 (-0.016, 0.027)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.838</td><td>p = 0.702</td><td>p = 0.605</td></tr>
-    ## <tr><td style="text-align:left">Coffee</td><td>-0.035 (-0.055, -0.015)</td><td>-0.010 (-0.042, 0.023)</td><td>-0.010 (-0.030, 0.010)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.0005</td><td>p = 0.527</td><td>p = 0.317</td></tr>
-    ## <tr><td style="text-align:left">Tea</td><td>0.007 (-0.014, 0.029)</td><td>-0.009 (-0.036, 0.016)</td><td>0.001 (-0.018, 0.020)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.511</td><td>p = 0.508</td><td>p = 0.893</td></tr>
-    ## <tr><td style="text-align:left">Beer</td><td>0.002 (-0.034, 0.037)</td><td>-0.022 (-0.064, 0.020)</td><td>-0.014 (-0.039, 0.014)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.906</td><td>p = 0.289</td><td>p = 0.296</td></tr>
-    ## <tr><td style="text-align:left">Wine</td><td>-0.009 (-0.043, 0.025)</td><td>-0.040 (-0.075, -0.005)</td><td>-0.030 (-0.061, -0.001)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.621</td><td>p = 0.036</td><td>p = 0.056</td></tr>
-    ## <tr><td style="text-align:left">Liquor</td><td>0.033 (-0.018, 0.087)</td><td>0.005 (-0.070, 0.085)</td><td>0.003 (-0.036, 0.038)</td></tr>
-    ## <tr><td style="text-align:left"></td><td>p = 0.251</td><td>p = 0.899</td><td>p = 0.881</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left">Observations</td><td>846</td><td>452</td><td>902</td></tr>
-    ## <tr><td style="text-align:left">R<sup>2</sup></td><td>0.117</td><td>0.059</td><td>0.094</td></tr>
-    ## <tr><td style="text-align:left">Adjusted R<sup>2</sup></td><td>0.097</td><td>0.017</td><td>0.075</td></tr>
-    ## <tr><td style="text-align:left">Residual Std. Error</td><td>0.314 (df = 826)</td><td>0.287 (df = 432)</td><td>0.294 (df = 883)</td></tr>
-    ## <tr><td style="text-align:left">F Statistic</td><td>5.770<sup>***</sup> (df = 19; 826)</td><td>1.417 (df = 19; 432)</td><td>5.061<sup>***</sup> (df = 18; 883)</td></tr>
-    ## <tr><td colspan="4" style="border-bottom: 1px solid black"></td></tr><tr><td style="text-align:left"><em>Note:</em></td><td colspan="3" style="text-align:right"><sup>*</sup>p<0.1; <sup>**</sup>p<0.05; <sup>***</sup>p<0.01</td></tr>
-    ## </table>
+<table style="text-align:center">
+<caption>
+<strong>Supplementary Table 3 - Multivariable linear regression Analyses (sTfR)</strong>
+</caption>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td colspan="3">
+sTfR (log)
+</td>
+</tr>
+<tr>
+<td>
+</td>
+<td colspan="3" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+Pre-menopausal women
+</td>
+<td>
+Post-menopausal women
+</td>
+<td>
+Men
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Age
+</td>
+<td>
+-0.027 (-0.042, -0.011)
+</td>
+<td>
+-0.002 (-0.026, 0.022)
+</td>
+<td>
+-0.010 (-0.018, -0.002)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.0004
+</td>
+<td>
+p = 0.892
+</td>
+<td>
+p = 0.016
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+BMI
+</td>
+<td>
+0.003 (-0.001, 0.007)
+</td>
+<td>
+0.001 (-0.005, 0.007)
+</td>
+<td>
+0.004 (-0.001, 0.009)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.207
+</td>
+<td>
+p = 0.728
+</td>
+<td>
+p = 0.128
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+CRP
+</td>
+<td>
+0.030 (-0.031, 0.095)
+</td>
+<td>
+0.041 (-0.068, 0.136)
+</td>
+<td>
+0.119 (0.025, 0.211)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.389
+</td>
+<td>
+p = 0.488
+</td>
+<td>
+p = 0.026
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Smoking(yes)
+</td>
+<td>
+-0.048 (-0.092, -0.005)
+</td>
+<td>
+-0.071 (-0.138, -0.009)
+</td>
+<td>
+-0.055 (-0.099, -0.012)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.037
+</td>
+<td>
+p = 0.045
+</td>
+<td>
+p = 0.018
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Pregnancy(Yes)
+</td>
+<td>
+0.013 (-0.032, 0.059)
+</td>
+<td>
+-0.033 (-0.077, 0.012)
+</td>
+<td>
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.559
+</td>
+<td>
+p = 0.153
+</td>
+<td>
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Nb donations (2 years)
+</td>
+<td>
+0.025 (0.006, 0.043)
+</td>
+<td>
+-0.002 (-0.023, 0.018)
+</td>
+<td>
+0.022 (0.012, 0.033)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.011
+</td>
+<td>
+p = 0.851
+</td>
+<td>
+p = 0.00003
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+(Nb donations (2 years))²
+</td>
+<td>
+-0.004 (-0.012, 0.003)
+</td>
+<td>
+0.001 (-0.008, 0.009)
+</td>
+<td>
+-0.0002 (-0.003, 0.002)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.241
+</td>
+<td>
+p = 0.865
+</td>
+<td>
+p = 0.888
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Days since last donation
+</td>
+<td>
+-0.021 (-0.046, 0.004)
+</td>
+<td>
+-0.043 (-0.079, -0.005)
+</td>
+<td>
+-0.015 (-0.037, 0.008)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.125
+</td>
+<td>
+p = 0.029
+</td>
+<td>
+p = 0.204
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+iron supplementation
+</td>
+<td>
+0.002 (-0.013, 0.018)
+</td>
+<td>
+0.005 (-0.016, 0.026)
+</td>
+<td>
+0.014 (-0.002, 0.031)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.801
+</td>
+<td>
+p = 0.637
+</td>
+<td>
+p = 0.094
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Red meat
+</td>
+<td>
+-0.068 (-0.094, -0.040)
+</td>
+<td>
+-0.0003 (-0.037, 0.039)
+</td>
+<td>
+-0.031 (-0.060, -0.001)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.00000
+</td>
+<td>
+p = 0.990
+</td>
+<td>
+p = 0.048
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Vegetables
+</td>
+<td>
+-0.020 (-0.076, 0.037)
+</td>
+<td>
+-0.001 (-0.065, 0.067)
+</td>
+<td>
+-0.015 (-0.058, 0.030)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.470
+</td>
+<td>
+p = 0.984
+</td>
+<td>
+p = 0.466
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Fruit and Berries
+</td>
+<td>
+0.009 (-0.037, 0.054)
+</td>
+<td>
+0.005 (-0.058, 0.068)
+</td>
+<td>
+-0.004 (-0.043, 0.033)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.694
+</td>
+<td>
+p = 0.871
+</td>
+<td>
+p = 0.826
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Milk
+</td>
+<td>
+0.041 (0.014, 0.067)
+</td>
+<td>
+0.032 (-0.003, 0.064)
+</td>
+<td>
+0.015 (-0.010, 0.040)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.004
+</td>
+<td>
+p = 0.073
+</td>
+<td>
+p = 0.218
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Fruit Juices
+</td>
+<td>
+-0.003 (-0.030, 0.024)
+</td>
+<td>
+0.005 (-0.024, 0.034)
+</td>
+<td>
+0.006 (-0.016, 0.027)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.838
+</td>
+<td>
+p = 0.702
+</td>
+<td>
+p = 0.605
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Coffee
+</td>
+<td>
+-0.035 (-0.055, -0.015)
+</td>
+<td>
+-0.010 (-0.042, 0.023)
+</td>
+<td>
+-0.010 (-0.030, 0.010)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.0005
+</td>
+<td>
+p = 0.527
+</td>
+<td>
+p = 0.317
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Tea
+</td>
+<td>
+0.007 (-0.014, 0.029)
+</td>
+<td>
+-0.009 (-0.036, 0.016)
+</td>
+<td>
+0.001 (-0.018, 0.020)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.511
+</td>
+<td>
+p = 0.508
+</td>
+<td>
+p = 0.893
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Beer
+</td>
+<td>
+0.002 (-0.034, 0.037)
+</td>
+<td>
+-0.022 (-0.064, 0.020)
+</td>
+<td>
+-0.014 (-0.039, 0.014)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.906
+</td>
+<td>
+p = 0.289
+</td>
+<td>
+p = 0.296
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Wine
+</td>
+<td>
+-0.009 (-0.043, 0.025)
+</td>
+<td>
+-0.040 (-0.075, -0.005)
+</td>
+<td>
+-0.030 (-0.061, -0.001)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.621
+</td>
+<td>
+p = 0.036
+</td>
+<td>
+p = 0.056
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Liquor
+</td>
+<td>
+0.033 (-0.018, 0.087)
+</td>
+<td>
+0.005 (-0.070, 0.085)
+</td>
+<td>
+0.003 (-0.036, 0.038)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+</td>
+<td>
+p = 0.251
+</td>
+<td>
+p = 0.899
+</td>
+<td>
+p = 0.881
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Observations
+</td>
+<td>
+846
+</td>
+<td>
+452
+</td>
+<td>
+902
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+R<sup>2</sup>
+</td>
+<td>
+0.117
+</td>
+<td>
+0.059
+</td>
+<td>
+0.094
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Adjusted R<sup>2</sup>
+</td>
+<td>
+0.097
+</td>
+<td>
+0.017
+</td>
+<td>
+0.075
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Residual Std. Error
+</td>
+<td>
+0.314 (df = 826)
+</td>
+<td>
+0.287 (df = 432)
+</td>
+<td>
+0.294 (df = 883)
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+F Statistic
+</td>
+<td>
+5.770<sup>\*\*\*</sup> (df = 19; 826)
+</td>
+<td>
+1.417 (df = 19; 432)
+</td>
+<td>
+5.061<sup>\*\*\*</sup> (df = 18; 883)
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+<em>Note:</em>
+</td>
+<td colspan="3" style="text-align:right">
+<sup>*</sup>p&lt;0.1; <sup>**</sup>p&lt;0.05; <sup>***</sup>p&lt;0.01
+</td>
+</tr>
+</table>
+-   
 
 ### Supp Figure 3: Visualizations of the effects of donation history on sTRF
 
@@ -10741,7 +12426,6 @@ Self-assessed health
 Self-assessed health was measured using the following question:
 
 -   How is your health in general?
-
 -   Poor, satisfactory, good, very good, excellent
 
 We use ordinal logistic regression analysis (Bender and Grouven 1997) to analyze the relationship between self-assessed health and ferritin. We test whether Ferritin level is a significant predictor of self-assessed health when controlling for age, BMI, CRP, number of donations in the last two years, and physical activity. We run both a frequentist analysis and a Bayesian analysis. Results from the frequentist analysis suggest that Ferritin is not a significant predictor of self-perceived health in blood donors. According to the Bayesian analysis, the data dees not provide strong evidence in favor of ferritin co-varying with self-perceived health.
@@ -10853,7 +12537,7 @@ ggplot2::ggsave("../results/figures/figure_4_health.png", plt,  height = 8.5 * 1
 Ordinal regression analysis
 ---------------------------
 
-To analyze the answers to the self-assessed health question properly, we use an ordinal proportional odds model or ordinal logistic model. This type of model is used to model outome variables that are ordered and represent an unknown latent variable. Here self-reported health is the ordered outcome variable we are trying to predict. Additional information about ordinal models in epidemiology can be found in (Abreu, Siqueira, and Caiaffa 2009). Because there are few donors who reported only satisfactory health, we pool together the data from pre-menopausal and post-menopausal women into a single women's group.
+To analyze the answers to the self-assessed health question properly, we use an ordinal proportional odds model or ordinal logistic model. This type of model is used to model outcome variables that are ordered and represent an unknown latent variable. Here self-reported health is the ordered outcome variable we are trying to predict. Additional information about ordinal models in epidemiology can be found in (Abreu, Siqueira, and Caiaffa 2009). Because there are few donors who reported only satisfactory health, we pool together the data from pre-menopausal and post-menopausal women into a single women's group.
 
 An example of how to interpret the odds-ratio that are computed from the regression coefficients can be found here [here](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=9&cad=rja&uact=8&ved=2ahUKEwjg1PO9g_TcAhVhD5oKHSt1BVYQFjAIegQIABAC&url=http%3A%2F%2Fweb.pdx.edu%2F~newsomj%2Fcdaclass%2Fho_ordinal%2520regression.pdf&usg=AOvVaw2NRuZfLiLnX4bUfqOPVUne).
 
@@ -11441,9 +13125,11 @@ Ferritin
 </tr>
 </tbody>
 </table>
-An increase in 1 point of BMI age results in a 4.9% decreases in your odds by of feeling in very good or excellent compared to satisfactory or good. An increase in one scale point in exercise frequency results in an increase of 39.4% of your odds of felling in excellent health compared to very good, good or satisfactory health.
+-   An increase in 1 point of BMI age results in a 4.9% decreases in your odds by of feeling in very good or excellent compared to satisfactory or good.
 
-Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a 11% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
+-   An increase in one scale point in exercise frequency results in an increase of 39.4% of your odds of felling in excellent health compared to very good, good or satisfactory health.
+
+-   Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a 11% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
 
 ##### Bootstrapped CIs
 
@@ -11543,8 +13229,8 @@ ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 1).
     ## Chain 1: 
-    ## Chain 1: Gradient evaluation took 0.000739 seconds
-    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 7.39 seconds.
+    ## Chain 1: Gradient evaluation took 0.000706 seconds
+    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 7.06 seconds.
     ## Chain 1: Adjust your expectations accordingly!
     ## Chain 1: 
     ## Chain 1: 
@@ -11561,15 +13247,15 @@ ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status 
     ## Chain 1: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 1: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 1: 
-    ## Chain 1:  Elapsed Time: 13.4942 seconds (Warm-up)
-    ## Chain 1:                12.4309 seconds (Sampling)
-    ## Chain 1:                25.9251 seconds (Total)
+    ## Chain 1:  Elapsed Time: 13.4581 seconds (Warm-up)
+    ## Chain 1:                12.5313 seconds (Sampling)
+    ## Chain 1:                25.9894 seconds (Total)
     ## Chain 1: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 2).
     ## Chain 2: 
-    ## Chain 2: Gradient evaluation took 0.000505 seconds
-    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 5.05 seconds.
+    ## Chain 2: Gradient evaluation took 0.000529 seconds
+    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 5.29 seconds.
     ## Chain 2: Adjust your expectations accordingly!
     ## Chain 2: 
     ## Chain 2: 
@@ -11586,15 +13272,15 @@ ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status 
     ## Chain 2: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 2: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 2: 
-    ## Chain 2:  Elapsed Time: 13.0834 seconds (Warm-up)
-    ## Chain 2:                14.2683 seconds (Sampling)
-    ## Chain 2:                27.3517 seconds (Total)
+    ## Chain 2:  Elapsed Time: 13.0848 seconds (Warm-up)
+    ## Chain 2:                14.391 seconds (Sampling)
+    ## Chain 2:                27.4759 seconds (Total)
     ## Chain 2: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 3).
     ## Chain 3: 
-    ## Chain 3: Gradient evaluation took 0.000536 seconds
-    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 5.36 seconds.
+    ## Chain 3: Gradient evaluation took 0.000557 seconds
+    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 5.57 seconds.
     ## Chain 3: Adjust your expectations accordingly!
     ## Chain 3: 
     ## Chain 3: 
@@ -11611,15 +13297,15 @@ ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status 
     ## Chain 3: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 3: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 3: 
-    ## Chain 3:  Elapsed Time: 12.3486 seconds (Warm-up)
-    ## Chain 3:                13.2491 seconds (Sampling)
-    ## Chain 3:                25.5977 seconds (Total)
+    ## Chain 3:  Elapsed Time: 12.4772 seconds (Warm-up)
+    ## Chain 3:                11.8492 seconds (Sampling)
+    ## Chain 3:                24.3263 seconds (Total)
     ## Chain 3: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 4).
     ## Chain 4: 
-    ## Chain 4: Gradient evaluation took 0.000523 seconds
-    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 5.23 seconds.
+    ## Chain 4: Gradient evaluation took 0.000549 seconds
+    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 5.49 seconds.
     ## Chain 4: Adjust your expectations accordingly!
     ## Chain 4: 
     ## Chain 4: 
@@ -11636,9 +13322,9 @@ ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status 
     ## Chain 4: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 4: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 4: 
-    ## Chain 4:  Elapsed Time: 13.8073 seconds (Warm-up)
-    ## Chain 4:                10.1704 seconds (Sampling)
-    ## Chain 4:                23.9778 seconds (Total)
+    ## Chain 4:  Elapsed Time: 13.2396 seconds (Warm-up)
+    ## Chain 4:                10.1389 seconds (Sampling)
+    ## Chain 4:                23.3784 seconds (Total)
     ## Chain 4:
 
 ``` r
@@ -11702,7 +13388,7 @@ stan_ess(ordinal_fit_B_women$fit)
 
 ##### Model comparison
 
-Model comparison using Bayes Factors in non trivial when using ordinal models. We use LOO (leave-One-OUt cross validation) as is shown [here](https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/). (Vehtari, Gelman, and Gabry 2017) is the main reference. We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor.
+Model comparison using Bayes Factors in non trivial when using ordinal models. We use LOO (Leave-One-Out cross validation) as is shown [here](https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/). (Vehtari, Gelman, and Gabry 2017) is the main reference. We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor.
 
 ``` r
 ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_status + age + BMI +  log_CRP + smoking + don_ct   +
@@ -11715,8 +13401,8 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_statu
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 1).
     ## Chain 1: 
-    ## Chain 1: Gradient evaluation took 0.000671 seconds
-    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 6.71 seconds.
+    ## Chain 1: Gradient evaluation took 0.000668 seconds
+    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 6.68 seconds.
     ## Chain 1: Adjust your expectations accordingly!
     ## Chain 1: 
     ## Chain 1: 
@@ -11733,15 +13419,15 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_statu
     ## Chain 1: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 1: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 1: 
-    ## Chain 1:  Elapsed Time: 13.52 seconds (Warm-up)
-    ## Chain 1:                12.4809 seconds (Sampling)
-    ## Chain 1:                26.0009 seconds (Total)
+    ## Chain 1:  Elapsed Time: 13.7477 seconds (Warm-up)
+    ## Chain 1:                12.6138 seconds (Sampling)
+    ## Chain 1:                26.3615 seconds (Total)
     ## Chain 1: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 2).
     ## Chain 2: 
-    ## Chain 2: Gradient evaluation took 0.000411 seconds
-    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 4.11 seconds.
+    ## Chain 2: Gradient evaluation took 0.000424 seconds
+    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 4.24 seconds.
     ## Chain 2: Adjust your expectations accordingly!
     ## Chain 2: 
     ## Chain 2: 
@@ -11758,15 +13444,15 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_statu
     ## Chain 2: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 2: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 2: 
-    ## Chain 2:  Elapsed Time: 13.1536 seconds (Warm-up)
-    ## Chain 2:                11.3368 seconds (Sampling)
-    ## Chain 2:                24.4904 seconds (Total)
+    ## Chain 2:  Elapsed Time: 13.2405 seconds (Warm-up)
+    ## Chain 2:                11.4906 seconds (Sampling)
+    ## Chain 2:                24.7312 seconds (Total)
     ## Chain 2: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 3).
     ## Chain 3: 
-    ## Chain 3: Gradient evaluation took 0.000566 seconds
-    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 5.66 seconds.
+    ## Chain 3: Gradient evaluation took 0.000539 seconds
+    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 5.39 seconds.
     ## Chain 3: Adjust your expectations accordingly!
     ## Chain 3: 
     ## Chain 3: 
@@ -11783,15 +13469,15 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_statu
     ## Chain 3: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 3: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 3: 
-    ## Chain 3:  Elapsed Time: 12.1565 seconds (Warm-up)
-    ## Chain 3:                13.1673 seconds (Sampling)
-    ## Chain 3:                25.3238 seconds (Total)
+    ## Chain 3:  Elapsed Time: 12.5418 seconds (Warm-up)
+    ## Chain 3:                13.2764 seconds (Sampling)
+    ## Chain 3:                25.8182 seconds (Total)
     ## Chain 3: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 4).
     ## Chain 4: 
-    ## Chain 4: Gradient evaluation took 0.000552 seconds
-    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 5.52 seconds.
+    ## Chain 4: Gradient evaluation took 0.000519 seconds
+    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 5.19 seconds.
     ## Chain 4: Adjust your expectations accordingly!
     ## Chain 4: 
     ## Chain 4: 
@@ -11808,9 +13494,9 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_statu
     ## Chain 4: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 4: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 4: 
-    ## Chain 4:  Elapsed Time: 13.505 seconds (Warm-up)
-    ## Chain 4:                12.0708 seconds (Sampling)
-    ## Chain 4:                25.5758 seconds (Total)
+    ## Chain 4:  Elapsed Time: 13.6765 seconds (Warm-up)
+    ## Chain 4:                12.291 seconds (Sampling)
+    ## Chain 4:                25.9675 seconds (Total)
     ## Chain 4:
 
 ``` r
@@ -12302,9 +13988,11 @@ Ferritin
 </tr>
 </tbody>
 </table>
-Results show that an increase in 1 point of BMI age results in a 6.6 % decrease in your odds by of feeling in very good pr excellent compared to satisfactory or good. An increase in one scale point in exercise frequency results in an increase of 44.1% of your odds of felling in excellent health compared to very good, good or satisfactory health.
+-   An increase in 1 point of BMI age results in a 6.6 % decrease in your odds by of feeling in very good pr excellent compared to satisfactory or good.
 
-Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a 5.8% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
+-   An increase in one scale point in exercise frequency results in an increase of 44.1% of your odds of felling in excellent health compared to very good, good or satisfactory health.
+
+-   Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a 5.8% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
 
 ##### Bootstrapped CIs
 
@@ -12400,8 +14088,8 @@ ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 1).
     ## Chain 1: 
-    ## Chain 1: Gradient evaluation took 0.000462 seconds
-    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 4.62 seconds.
+    ## Chain 1: Gradient evaluation took 0.000443 seconds
+    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 4.43 seconds.
     ## Chain 1: Adjust your expectations accordingly!
     ## Chain 1: 
     ## Chain 1: 
@@ -12418,15 +14106,15 @@ ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP
     ## Chain 1: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 1: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 1: 
-    ## Chain 1:  Elapsed Time: 7.54115 seconds (Warm-up)
-    ## Chain 1:                6.31951 seconds (Sampling)
-    ## Chain 1:                13.8607 seconds (Total)
+    ## Chain 1:  Elapsed Time: 7.77389 seconds (Warm-up)
+    ## Chain 1:                6.2439 seconds (Sampling)
+    ## Chain 1:                14.0178 seconds (Total)
     ## Chain 1: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 2).
     ## Chain 2: 
-    ## Chain 2: Gradient evaluation took 0.000372 seconds
-    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 3.72 seconds.
+    ## Chain 2: Gradient evaluation took 0.000351 seconds
+    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 3.51 seconds.
     ## Chain 2: Adjust your expectations accordingly!
     ## Chain 2: 
     ## Chain 2: 
@@ -12443,15 +14131,15 @@ ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP
     ## Chain 2: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 2: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 2: 
-    ## Chain 2:  Elapsed Time: 7.63427 seconds (Warm-up)
-    ## Chain 2:                9.40166 seconds (Sampling)
-    ## Chain 2:                17.0359 seconds (Total)
+    ## Chain 2:  Elapsed Time: 7.99146 seconds (Warm-up)
+    ## Chain 2:                9.37647 seconds (Sampling)
+    ## Chain 2:                17.3679 seconds (Total)
     ## Chain 2: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 3).
     ## Chain 3: 
-    ## Chain 3: Gradient evaluation took 0.000326 seconds
-    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 3.26 seconds.
+    ## Chain 3: Gradient evaluation took 0.000327 seconds
+    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 3.27 seconds.
     ## Chain 3: Adjust your expectations accordingly!
     ## Chain 3: 
     ## Chain 3: 
@@ -12468,15 +14156,15 @@ ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP
     ## Chain 3: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 3: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 3: 
-    ## Chain 3:  Elapsed Time: 7.81885 seconds (Warm-up)
-    ## Chain 3:                6.34741 seconds (Sampling)
-    ## Chain 3:                14.1663 seconds (Total)
+    ## Chain 3:  Elapsed Time: 7.75811 seconds (Warm-up)
+    ## Chain 3:                6.35782 seconds (Sampling)
+    ## Chain 3:                14.1159 seconds (Total)
     ## Chain 3: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 4).
     ## Chain 4: 
-    ## Chain 4: Gradient evaluation took 0.000318 seconds
-    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 3.18 seconds.
+    ## Chain 4: Gradient evaluation took 0.000345 seconds
+    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 3.45 seconds.
     ## Chain 4: Adjust your expectations accordingly!
     ## Chain 4: 
     ## Chain 4: 
@@ -12493,9 +14181,9 @@ ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP
     ## Chain 4: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 4: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 4: 
-    ## Chain 4:  Elapsed Time: 8.03053 seconds (Warm-up)
-    ## Chain 4:                8.57453 seconds (Sampling)
-    ## Chain 4:                16.6051 seconds (Total)
+    ## Chain 4:  Elapsed Time: 7.91389 seconds (Warm-up)
+    ## Chain 4:                8.52599 seconds (Sampling)
+    ## Chain 4:                16.4399 seconds (Total)
     ## Chain 4:
 
 ``` r
@@ -12559,7 +14247,7 @@ stan_ess(ordinal_fit_B_men$fit)
 
 ##### Model comparison
 
-We use LOO (leave-One-OUt cross validation). We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor.
+We use LOO (Leave-One-Out cross validation). We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor.
 
 ``` r
 ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log_CRP + smoking + don_ct   +
@@ -12572,8 +14260,8 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 1).
     ## Chain 1: 
-    ## Chain 1: Gradient evaluation took 0.000429 seconds
-    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 4.29 seconds.
+    ## Chain 1: Gradient evaluation took 0.000604 seconds
+    ## Chain 1: 1000 transitions using 10 leapfrog steps per transition would take 6.04 seconds.
     ## Chain 1: Adjust your expectations accordingly!
     ## Chain 1: 
     ## Chain 1: 
@@ -12590,15 +14278,15 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log
     ## Chain 1: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 1: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 1: 
-    ## Chain 1:  Elapsed Time: 7.73234 seconds (Warm-up)
-    ## Chain 1:                7.96702 seconds (Sampling)
-    ## Chain 1:                15.6994 seconds (Total)
+    ## Chain 1:  Elapsed Time: 9.77407 seconds (Warm-up)
+    ## Chain 1:                9.35157 seconds (Sampling)
+    ## Chain 1:                19.1256 seconds (Total)
     ## Chain 1: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 2).
     ## Chain 2: 
-    ## Chain 2: Gradient evaluation took 0.000371 seconds
-    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 3.71 seconds.
+    ## Chain 2: Gradient evaluation took 0.000349 seconds
+    ## Chain 2: 1000 transitions using 10 leapfrog steps per transition would take 3.49 seconds.
     ## Chain 2: Adjust your expectations accordingly!
     ## Chain 2: 
     ## Chain 2: 
@@ -12615,15 +14303,15 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log
     ## Chain 2: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 2: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 2: 
-    ## Chain 2:  Elapsed Time: 7.63468 seconds (Warm-up)
-    ## Chain 2:                6.60882 seconds (Sampling)
-    ## Chain 2:                14.2435 seconds (Total)
+    ## Chain 2:  Elapsed Time: 8.54292 seconds (Warm-up)
+    ## Chain 2:                6.95192 seconds (Sampling)
+    ## Chain 2:                15.4948 seconds (Total)
     ## Chain 2: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 3).
     ## Chain 3: 
-    ## Chain 3: Gradient evaluation took 0.000322 seconds
-    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 3.22 seconds.
+    ## Chain 3: Gradient evaluation took 0.000359 seconds
+    ## Chain 3: 1000 transitions using 10 leapfrog steps per transition would take 3.59 seconds.
     ## Chain 3: Adjust your expectations accordingly!
     ## Chain 3: 
     ## Chain 3: 
@@ -12640,15 +14328,15 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log
     ## Chain 3: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 3: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 3: 
-    ## Chain 3:  Elapsed Time: 7.51016 seconds (Warm-up)
-    ## Chain 3:                7.83561 seconds (Sampling)
-    ## Chain 3:                15.3458 seconds (Total)
+    ## Chain 3:  Elapsed Time: 7.65249 seconds (Warm-up)
+    ## Chain 3:                9.01457 seconds (Sampling)
+    ## Chain 3:                16.6671 seconds (Total)
     ## Chain 3: 
     ## 
     ## SAMPLING FOR MODEL 'a521321bc853dbf937f110911292cc8e' NOW (CHAIN 4).
     ## Chain 4: 
-    ## Chain 4: Gradient evaluation took 0.000377 seconds
-    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 3.77 seconds.
+    ## Chain 4: Gradient evaluation took 0.000324 seconds
+    ## Chain 4: 1000 transitions using 10 leapfrog steps per transition would take 3.24 seconds.
     ## Chain 4: Adjust your expectations accordingly!
     ## Chain 4: 
     ## Chain 4: 
@@ -12665,9 +14353,9 @@ ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log
     ## Chain 4: Iteration: 1800 / 2000 [ 90%]  (Sampling)
     ## Chain 4: Iteration: 2000 / 2000 [100%]  (Sampling)
     ## Chain 4: 
-    ## Chain 4:  Elapsed Time: 7.09561 seconds (Warm-up)
-    ## Chain 4:                7.31299 seconds (Sampling)
-    ## Chain 4:                14.4086 seconds (Total)
+    ## Chain 4:  Elapsed Time: 7.58194 seconds (Warm-up)
+    ## Chain 4:                7.73128 seconds (Sampling)
+    ## Chain 4:                15.3132 seconds (Total)
     ## Chain 4:
 
 ``` r
@@ -12681,338 +14369,13 @@ LOO(ordinal_fit_restricted, ordinal_fit_B_men)
 
 Adding Ferritin does not improve the fit between the data and the model.
 
-Tables and Figures
-------------------
+Supplementary Tables
+--------------------
 
-Supplementary Table / Figure
-----------------------------
+### Ordinal logistic regression
 
 ``` r
-bayes_regression_coeffs_women %>% 
-  bind_rows(bayes_regression_coeffs_men) %>% 
-  rename(group = sex) %>% 
-  dplyr::select(-coefficient:-Upper, - method) %>% 
-  mutate(CI = paste(round(Lower_OR,2), round(Upper_OR,2), sep = "-" )) %>% 
-  dplyr::select(group, regressor, coefficient_OR, CI ) %>% 
-  mutate(regressor = dplyr::recode(regressor, age = "Age",
-                       don_ct = "Nb donations (2 years)",
-                       log_CRP = "CRP",
-                       log_Ferritin = "Ferritin",
-                       log_last_don =  "Nb of days since last donation",
-                       menopausal_status = "Menopausal status",
-                       physical_act_daily_n = "Physical activity (daily amount)", 
-                       physical_act_freq_n = "Physical activity (frequency)",
-                       smoking = "Smoking")) %>% 
-  rename(Odds.Ratio = coefficient_OR) %>% 
-  stargazer(title= "Bayesian ordinal logistic regression",
-            type = "html", 
-          summary = FALSE, 
-          rownames = FALSE,
-          header = TRUE,
-          out = "../results/tables/supp_table_4_ordinal_bayes_health.html",
-          initial.zero = FALSE, 
-          digits = 2)  
-```
-
-<table style="text-align:center">
-<caption>
-<strong>Bayesian ordinal logistic regression</strong>
-</caption>
-<tr>
-<td colspan="4" style="border-bottom: 1px solid black">
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-group
-</td>
-<td>
-regressor
-</td>
-<td>
-Odds.Ratio
-</td>
-<td>
-CI
-</td>
-</tr>
-<tr>
-<td colspan="4" style="border-bottom: 1px solid black">
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-Age
-</td>
-<td>
-.95
-</td>
-<td>
-0.9-1
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-BMI
-</td>
-<td>
-.95
-</td>
-<td>
-0.94-0.97
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-Nb donations (2 years)
-</td>
-<td>
-1.07
-</td>
-<td>
-1-1.14
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-CRP
-</td>
-<td>
-.76
-</td>
-<td>
-0.56-1.04
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-Ferritin
-</td>
-<td>
-1.11
-</td>
-<td>
-1.01-1.23
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-Nb of days since last donation
-</td>
-<td>
-1.00
-</td>
-<td>
-0.9-1.12
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-Menopausal status
-</td>
-<td>
-.97
-</td>
-<td>
-0.72-1.31
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-Physical activity (daily amount)
-</td>
-<td>
-1.23
-</td>
-<td>
-1.09-1.39
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-Physical activity (frequency)
-</td>
-<td>
-1.40
-</td>
-<td>
-1.25-1.57
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Women
-</td>
-<td>
-Smoking
-</td>
-<td>
-.84
-</td>
-<td>
-0.64-1.11
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-Age
-</td>
-<td>
-.87
-</td>
-<td>
-0.84-0.91
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-BMI
-</td>
-<td>
-.93
-</td>
-<td>
-0.91-0.96
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-Nb donations (2 years)
-</td>
-<td>
-1.08
-</td>
-<td>
-1.02-1.14
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-CRP
-</td>
-<td>
-1.08
-</td>
-<td>
-0.61-1.9
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-Ferritin
-</td>
-<td>
-1.06
-</td>
-<td>
-0.93-1.2
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-Nb of days since last donation
-</td>
-<td>
-1.02
-</td>
-<td>
-0.9-1.15
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-Physical activity (daily amount)
-</td>
-<td>
-1.26
-</td>
-<td>
-1.1-1.44
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-Physical activity (frequency)
-</td>
-<td>
-1.45
-</td>
-<td>
-1.28-1.64
-</td>
-</tr>
-<tr>
-<td style="text-align:left">
-Men
-</td>
-<td>
-Smoking
-</td>
-<td>
-.66
-</td>
-<td>
-0.46-0.93
-</td>
-</tr>
-<tr>
-<td colspan="4" style="border-bottom: 1px solid black">
-</td>
-</tr>
-</table>
-``` r
-stargazer(fit_women,fit_men,
+stargazer(fit_women, fit_men,
           out = "../results/tables/supp_table_3_frequentist_health.html",
           intercept.bottom = FALSE,
           title = "Ordinal logistic regression",
@@ -13391,6 +14754,334 @@ chi<sup>2</sup>
 </td>
 </tr>
 </table>
+### Bayesian ordinal logistic regression
+
+``` r
+bayes_regression_coeffs_women %>% 
+  bind_rows(bayes_regression_coeffs_men) %>% 
+  rename(group = sex) %>% 
+  dplyr::select(-coefficient:-Upper, - method) %>% 
+  mutate(CI = paste(round(Lower_OR,2), round(Upper_OR,2), sep = "-" )) %>% 
+  dplyr::select(group, regressor, coefficient_OR, CI ) %>% 
+  mutate(regressor = dplyr::recode(regressor, age = "Age",
+                       don_ct = "Nb donations (2 years)",
+                       log_CRP = "CRP",
+                       log_Ferritin = "Ferritin",
+                       log_last_don =  "Nb of days since last donation",
+                       menopausal_status = "Menopausal status",
+                       physical_act_daily_n = "Physical activity (daily amount)", 
+                       physical_act_freq_n = "Physical activity (frequency)",
+                       smoking = "Smoking")) %>% 
+  rename(Odds.Ratio = coefficient_OR) %>% 
+  stargazer(title= "Bayesian ordinal logistic regression",
+            type = "html", 
+          summary = FALSE, 
+          rownames = FALSE,
+          header = TRUE,
+          out = "../results/tables/supp_table_4_ordinal_bayes_health.html",
+          initial.zero = FALSE, 
+          digits = 2)  
+```
+
+<table style="text-align:center">
+<caption>
+<strong>Bayesian ordinal logistic regression</strong>
+</caption>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+group
+</td>
+<td>
+regressor
+</td>
+<td>
+Odds.Ratio
+</td>
+<td>
+CI
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+Age
+</td>
+<td>
+.95
+</td>
+<td>
+0.9-1
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+BMI
+</td>
+<td>
+.95
+</td>
+<td>
+0.94-0.97
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+Nb donations (2 years)
+</td>
+<td>
+1.07
+</td>
+<td>
+1-1.14
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+CRP
+</td>
+<td>
+.76
+</td>
+<td>
+0.56-1.04
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+Ferritin
+</td>
+<td>
+1.11
+</td>
+<td>
+1.01-1.23
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+Nb of days since last donation
+</td>
+<td>
+1.00
+</td>
+<td>
+0.9-1.12
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+Menopausal status
+</td>
+<td>
+.97
+</td>
+<td>
+0.72-1.31
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+Physical activity (daily amount)
+</td>
+<td>
+1.23
+</td>
+<td>
+1.09-1.39
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+Physical activity (frequency)
+</td>
+<td>
+1.40
+</td>
+<td>
+1.25-1.57
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Women
+</td>
+<td>
+Smoking
+</td>
+<td>
+.84
+</td>
+<td>
+0.64-1.11
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+Age
+</td>
+<td>
+.87
+</td>
+<td>
+0.84-0.91
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+BMI
+</td>
+<td>
+.93
+</td>
+<td>
+0.91-0.96
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+Nb donations (2 years)
+</td>
+<td>
+1.08
+</td>
+<td>
+1.02-1.14
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+CRP
+</td>
+<td>
+1.08
+</td>
+<td>
+0.61-1.9
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+Ferritin
+</td>
+<td>
+1.06
+</td>
+<td>
+0.93-1.2
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+Nb of days since last donation
+</td>
+<td>
+1.02
+</td>
+<td>
+0.9-1.15
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+Physical activity (daily amount)
+</td>
+<td>
+1.26
+</td>
+<td>
+1.1-1.44
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+Physical activity (frequency)
+</td>
+<td>
+1.45
+</td>
+<td>
+1.28-1.64
+</td>
+</tr>
+<tr>
+<td style="text-align:left">
+Men
+</td>
+<td>
+Smoking
+</td>
+<td>
+.66
+</td>
+<td>
+0.46-0.93
+</td>
+</tr>
+<tr>
+<td colspan="4" style="border-bottom: 1px solid black">
+</td>
+</tr>
+</table>
+### Summary table
+
 ``` r
 final_results <- ordinal_regression_coefficients_women %>% 
   bind_rows(bayes_regression_coeffs_women, 

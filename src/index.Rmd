@@ -5,6 +5,13 @@ output: github_document
 bibliography: index.bib
 ---
 
+# Executive summary 
+
+This document includes all code necessary to run the analysis and produce the figures of : *The effect of donation activity dwarfs the effect of lifestyle, diet and iron supplementation on donor iron status.* Lobier, Nittymäki, Castren, Palokongas, Partanen and Arvas. 
+
+The analysis has  three parts. In a first part we describe the study population and compute the prevalence of iron deficiency and anemia. In a second part, we use multivariate linear regression to identify the factors that co-vary with iron levels (using ferritin and sTfR) in the blood donor population. In a third part, we test whether ferritin levels affect donor self-reported health using ordinal logistic regression. 
+
+
 ```{r setup, , message = FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
@@ -38,19 +45,13 @@ library(lazerhawk)
 ```
 
 
-# Executive summary 
 
-This document includes all code necessary to run the analysis and produce the figures of : The effect of donation activity dwarfs the effect of lifestyle, diet and iron supplementation on donor iron status. Lobier, Nittymäki, Castren, Palokongas, Partanen and Arvas. 
-
-The analysis has  three parts. In a first part we describe the study population and compute the prevalence of iron deficiency and anemia. In a second part, we use multivariate linear regression to identify the factors that co-vary with iron levels (using ferritin and sTfR) in the blood donor population. In a third part, we test whether ferritin levels affect donor self-reported health using ordinal logistic regression. 
 
 
 # Data loading and preparation
 
 ```{r , warning=FALSE}
 
-#Get unaveraged data
-# load("../results/R-objects/r02ss.matbyidsDa.rdata")
 load("../data/r02.fd.bd.all.rdata")
 
 indiv_donations_data <- output
@@ -76,7 +77,7 @@ blood_data_summary <- indiv_donations_data %>%
 
 # Get values for first study donation with the required measurements donation (regardless of donation type)
 # We remove events with no Ferritin and hb_v to be inline with from when the nb of previous donations were counted.
-# More info in datadictionnary.txt
+
 
 blood_values_init <- indiv_donations_data %>% 
   filter(!is.na(Ferritin) & !is.na(Hb_v) ) %>% 
@@ -94,7 +95,6 @@ load("../data/r02ds.donorData.rdata")
 dons <- output
 rm(output)
 
-# There are only 2584 donors in the dons df becasue 2 donors have no FB donations (data_dictionnary.txt)
 
 blood_data_summary <- dons %>%
   inner_join(blood_data_summary, by = "donor") %>%
@@ -190,7 +190,7 @@ blood_data_summary_final <- blood_data_summary_final %>%
 
 ### Donation history
 
-WE remove `r blood_data_summary_final %>% filter(is.na(DaysToPreviousFB)) %>% nrow()` donors who have not donated previously (They are missing the Nb of days since last FB donation variable)
+We remove `r blood_data_summary_final %>% filter(is.na(DaysToPreviousFB)) %>% nrow()` donors who have not donated previously (They are missing the Nb of days since last FB donation variable)
 
 ```{r}
 new_donors_data <- blood_data_summary_final %>% 
@@ -537,12 +537,9 @@ summary_table <- CreateTableOne(data = blood_data_summary_tbl %>% mutate(group =
                                                                                                Post_menopause_women = "Post-menopausal women")) ,
                                 vars = myVars, strata = "group",test = FALSE)
 
-# print(summary_table, nonnormal = non_normal_vars)
 ```
 
 ```{r}
-
-# CreateTableOne(data = blood_data_summary_tbl,  vars = myVars, strata = "group" )
 
 tab3Mat <- print(summary_table, nonnormal = non_normal_vars, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
 
@@ -721,11 +718,8 @@ for (excluded_group in levels(blood_data_summary_final$group)){
 ```{r, warning= FALSE, message=FALSE}
 all_stat_test <- bind_rows(t_test_norm, t_test_non_norm, chi_sqr_test)
 
-## Apply holm's bonferroni p correction
- 
-
+## Apply holm- bonferroni p correction
 all_stat_test$p.value.adj <- p.adjust(all_stat_test$p.value, method = "holm") 
-
 
 final_p_values <- all_stat_test %>% 
   dplyr::select( -statistic, -p.value) %>% 
@@ -757,7 +751,6 @@ final_p_values <- all_stat_test %>%
   arrange(variable) %>% 
   mutate(variable = as.character(variable))   
 
-
 ```
 
 
@@ -766,7 +759,7 @@ final_p_values %>%
   kable()
 ```
 
-```{r , warning=FALSE, }
+```{r , warning=FALSE}
 
 # Saving resuls of statistical tests to html file
 
@@ -777,8 +770,6 @@ stargazer(final_p_values, type = "html",
           out = "../results/tables/table_1_p_values_paired.html",
           initial.zero = FALSE, 
           digits = 5)
-
-
 ```
 
 
@@ -855,8 +846,8 @@ data %>%
   spread(key = group, value = prev) %>% 
   kable()
 
-
 ```
+
 
 
 ### Overlap of low ferritin and high sTfR 
@@ -893,9 +884,12 @@ data %>%
                                   ID_high_sTRF = "Both")) %>% 
   spread(key = group, value = prev) %>% 
   kable()
+
 ```
 
+
 ### Overlap between anemia (low hemoglobin) and iron deficiency
+
 
 Here we look at the proportion of donors with low hemoglobin that also exhibit iron deficiency ( coded as ID: low ferritin and/or high sTfR).
 
@@ -924,10 +918,12 @@ tab3Mat <- print(summary_table, quote = FALSE, noSpaces = TRUE, printToggle = FA
 
 tab3Mat %>% 
   kable()
+
 ```
 
 
 ### Further computations for discussion
+
 
 First we compute, the proportion of donors identified as iron deficient (either low ferritin or high sTfR) that have high sTfR but normal ferritin for a ferritin threshold of 15 $\mu g/L$.
 
@@ -1012,8 +1008,8 @@ blood_data_summary_final %>%
 ```
 
 
-
 ### CRP levels for anemic donors with and without ID
+
 
 Here we check that high ferritin values for anemic donors was not a consequence of inflammation (high CRP). Results show that only one anemic donor has elevated CRP which could indicate inflammation. 
 
@@ -1123,8 +1119,7 @@ plt
 
 
 ```{r}
-# Create labeller lookup table
-# http://ggplot2.tidyverse.org/reference/labeller.html
+
 group_labels <- c(
   Pre_menopause_women = "Pre-menopausal women",
   Post_menopause_women = "Post-menopausal women",
@@ -1182,6 +1177,7 @@ blood_data_summary_final %>%
 
 ### Compliance when iron supplementation was provided
 
+We then investigate how much iron was ingested by those donors who reported being offered iron. 
 
 ```{r}
 blood_data_summary_final %>% 
@@ -1234,10 +1230,10 @@ blood_data_summary_final %>%
 
 ## Regressions on sTfR and ferritin  
 
-We analyzed the data with multiple linear regression. We first ran Ordinary Least Square (OLS) regressions and their diagnostics. If the diagnostics identified problematic observations (e.g., outliers, influential observations), we also ran robust regression regressions [@yu2017robust]. Robust regression is less sensitive to infulential observations and gives more accurate estimates of regression coefficients in the presence of problematic observations. Using robust regression leads to a more principled approach to regression analysis and avoids potential confounds introduced by selective removal of influential observations. Robust regression is based on less assumptions and is less sensitive to outliers. As the rlm command from the MASS package does not compute directly the *t* and *p* values, we used the f.robftest function from the sfsmisc package. Practical examples of using robust regression can be found in the literature [@davison2017platelet].  
+We analyzed the data with multiple linear regression. We first ran Ordinary Least Square (OLS) regressions and their diagnostics. If the diagnostics identified problematic observations (e.g., outliers, influential observations), we also ran robust regression regressions [@yu2017robust]. Robust regression is based on less assumptions than OLS regression and is less sensitive to influential observations. It  gives more accurate estimates of regression coefficients in the presence of problematic observations. Using robust regression leads to a more principled approach to regression analysis and avoids potential confounds introduced by selective removal of influential observations. As the rlm command from the MASS package does not compute directly the *t* and *p* values, we used the f.robftest function from the sfsmisc package. Practical examples of using robust regression can be found in the literature [@davison2017platelet].  
 
 
-In addition, we used relative importance analysis to estimate tthe average proportion of variance in the outcome variable explained by each co-variate [@Groemping2006]. Relative iportance was computed using the pmvd method which assigns 0 to the relative importance of a regressor if it is non significant in the complete model. .
+In addition, we used relative importance analysis to estimate the average proportion of variance in the outcome variable explained by each co-variate [@Groemping2006]. Relative iportance was computed using the pmvd method which assigns 0 to the relative importance of a regressor if it is non significant in the complete model. .
 
 The regressors were entered as follows in the regression models for sTfR and ferritin:
 
@@ -1251,7 +1247,7 @@ The regressors were entered as follows in the regression models for sTfR and fer
   * Iron supplementation 
   * All dietary intake
   
-We compute both coefficients and standardized coefficients (with all dependent and independent variables standardized) for robust regression and only coefficients for OLS regression. We present robust coefficients and their bootstrapped BCa 95% confidence intervals in Table 1 (ferritin) and  Table 2 (sTfR), robust standardized coefficients, their bootstrapped distribution and BCa 95% confidence intervals in figure 2.A and non-standardized OLS regression coefficients in Supplementary Table 1 (Ferritin) and 2 (sTfR). 
+We compute both coefficients and standardized coefficients (with all dependent and independent variables standardized) for robust regression and only coefficients for OLS regression. We present robust coefficients and their bootstrapped BCa 95% confidence intervals in Table 1 (ferritin) and  Table 2 (sTfR), robust standardized coefficients, their bootstrapped distribution and BCa 95% confidence intervals in Figure 2.A and non-standardized OLS regression coefficients in Supplementary Table 1 (Ferritin) and 2 (sTfR). 
 
 ## Pre-processing
 
@@ -1457,15 +1453,12 @@ stargazer( robust_mdl_pre_menop_w, lm7_pre_menop_std,
 
 Results from robust and OLS rergessions are similar. Ferritin levels are positively correlated with age, BMI, Days since last donation and negatively correlated with nb of donations in teh last two years. 
 
-```{r}
-
-```
 
   * An increase in 5 years of age is associated with a `r round(exp(tidy_model_w_pre %>% filter(term == "age") %>% magrittr::extract2("estimate"))-1,3)*100` % increase in Ferritin levels.
 
   * A doubling of the number of days since the last donation is associated with a `r round(exp(tidy_model_w_pre %>% filter(term == "log_last_don") %>% magrittr::extract2("estimate"))-1,3)*100` % increase in Ferritin levels.
 
-  * An additional donation in the previous 2 years is associated with a `r round(exp(tidy_model_w_pre %>% filter(term == "don_ct") %>% magrittr::extract2("estimate"))-1,3)*100` % decrease in Ferritin levels.
+  * An additional donation in the previous 2 years is associated with a `r round(exp(tidy_model_w_pre %>% filter(term == "don_ct") %>% magrittr::extract2("estimate"))-1,3)*-100` % decrease in Ferritin levels.
   
 #### Relative importance
 
@@ -1596,9 +1589,12 @@ stargazer(robust_mdl_sTfR_pre_menop_w, lm7_pre_menop_sTfR,
           
 ```
 
+The explained R² is smaller than for Ferritin. Iron supplementation has no significant influence on sTfR levels. The number of donations in the previous two years is negatively correlated with sTfR levels whilst the time since last donation does not have a significant effect. 
+
 #### Relative importance 
 
-The relative importance analyses are run only on regressors that are consistently significant in at least one demographic group.
+
+Relative importance analyses are run only on regressors that are consistently significant in at least one demographic group.
 
 ```{r, warning = FALSE, message=FALSE}
 test_data_2_std<- test_data_std %>% 
@@ -1784,6 +1780,7 @@ stargazer(robust_mdl_post_menop_w, lm7_post_menop_std,
 
 Results from robust and OLS regressions differ slightly. In both models, ferritin levels are positively correlated with  BMI, nb of days since last donation, and wine consumption (which would not survive multiple correction).
 
+
   * A doubling of the number of days since the last donation is associated with a `r round(exp(tidy_model_w_post %>% filter(term == "log_last_don") %>% magrittr::extract2("estimate"))-1,3)*100` % increase in Ferritin levels.
 
 #### Relative importance
@@ -1854,6 +1851,9 @@ ggplot2::ggsave("../results/figures/supp_fig_3_post_menop_sTfR.svg", post_menop_
 pre_menop_diag_plot
 ```
 
+
+There are several problematic observations, so we also run robust regression. 
+
 #### Robust regression model and p-values
 
 
@@ -1913,12 +1913,13 @@ stargazer(robust_mdl_sTfR_post_menop_w, lm7_post_menop_sTfR,
           
 ```
 
+
+The regression R² is only .06, and the overall regression is not significant.  Our covariates cannot significantly explain inter-individual variability in sTfR. 
+
 #### Relative importance of regressors 
 
-we run this only on significant regressors ?
+This analysis is run only on regressors that are consistently significant in at least one demographic group. 
 
-Is very computationally intensive if we run on all 20 predictors...
-So we only run the predictors that were significant in at least one of the donor groups.
 
 ```{r , warning = FALSE}
 test_data_2_std<- test_data_std %>% 
@@ -2038,6 +2039,9 @@ autoplot(lm7_men_std, data = test_data_std, which = c(1:6), ncol = 3,  label.n =
 men_diag_plot
 ```
 
+
+There are seevral problemetic observations, so we also run robust regressions. 
+
 #### Robust regression model and p-values
 
 ```{r, warning =  FALSE}
@@ -2096,7 +2100,7 @@ stargazer(robust_mdl_men, lm7_men_std,
           
 ```
 
-Results from robust and OLS rergessions are similar. In both models, ferritin levels are positively correlated with  age, BMI, nb of days since last donation,  red meat consumption as well as Beer and wine consumption (would not survive multiple comparison correction). and wine consumption (which would not survive multiple correction). Ferritin levels are negatively correlated with the number of donations and iron supplementation. A significant negative corelation with the nb of donations squared indicates that the effect of nb of donations is larger for small numbers of donations than for large number of donations.
+Results from robust and OLS regressions are similar. In both models, ferritin levels are positively correlated with  age, BMI, nb of days since last donation,  red meat consumption as well as Beer and wine consumption (would not survive multiple comparison correction). and wine consumption (which would not survive multiple correction). Ferritin levels are negatively correlated with the number of donations and iron supplementation. A significant negative corelation with the nb of donations squared indicates that the effect of nb of donations is larger for small numbers of donations than for large number of donations.
 
   * An increase in 5 years of age is associated with a `r round(exp(tidy_model_men %>% filter(term == "age") %>% magrittr::extract2("estimate"))-1,3)*100` % increase in Ferritin levels.
 
@@ -2234,6 +2238,9 @@ stargazer(robust_mdl_sTfR_men, lm7_men_sTfR,
           report=('vcp'))
           
 ```
+
+The R² is smaller than the one obtained for ferritin for the same demographic group. Nb of donations in the last two years but not time since last donations significantly co-varies with sTfR.
+
 
 #### Relative importance
 
@@ -3117,7 +3124,7 @@ bootstrap_Bca_CI_robust_std_sTfR <- bootstrap_Bca_CI_robust_std_sTfR %>%
 
 #### Table 2 - Outcome = Ferritin 
 
-```{r test4}
+```{r}
 # create pvlue list to get the p values from the appropriate package
 
 robust_p_values = list(3)
@@ -3140,7 +3147,7 @@ robust_p_values[[3]] = p_matrix
 ```
 
 
-```{r }
+```{r, results='asis'}
 
 # ouput to file
 
@@ -3196,6 +3203,7 @@ stargazer(robust_mdl_pre_menop_w, robust_mdl_post_menop_w, robust_mdl_men,
           digits = 3)
 ```
 
+- 
 
 #### Table 3 - Outcome = sTfR
 
@@ -3223,9 +3231,7 @@ robust_p_values_sTfR[[3]] = p_matrix
 ```
 
 
-```{r }
-
-# SAve output to file
+```{r, results='asis'}
 
 stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_sTfR_men,
           out = "../results/tables/table_3_robust_regressions_complete__values.html",
@@ -3279,13 +3285,15 @@ stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_
           digits = 3)
 ```
 
-
+-
 
 #### Figure 2 
 
 ##### Bootstrapped coeffs
 
 The bootstrapped coefficients that are displayed are the standardized coefficients. 
+
+###### Ferritin
 
 ```{r}
 
@@ -3325,6 +3333,10 @@ bootstrap_distrib_robust_std %>%
 ggplot2::ggsave("../results/figures/Figure_2_coeffs_Ferritin.png",device = "png", height = 17, width = 6.75, units = "cm" )
 
 ```
+
+
+###### sTfR
+
 
 ```{r}
 
@@ -3511,7 +3523,7 @@ plt <- relativ_impo_data_sTfR %>%
         strip.text = element_text(face="bold", size = 8*1.333333), # weird sizing issue ...
         axis.line = element_line(colour="black"),
         axis.title.y = element_blank(),
-        axis.title.x = element_text(size = 8*1.3333),,
+        axis.title.x = element_text(size = 8*1.3333),
         axis.text = element_text(size = 6*1.333333),
         panel.grid.major.y = element_blank()) +
   ylab("Average percentage of explained \nvariance (pmvd)")
@@ -3681,10 +3693,11 @@ stargazer(lm7_pre_menop_std, lm7_post_menop_std, lm7_men_std,
           digits = 2)
 ```
 
+-
 
 ### Supp Table 2: Regression of sTfR
 
-```{r }
+```{r, results='asis'}
 stargazer(lm7_pre_menop_sTfR, lm7_post_menop_sTfR,lm7_men_sTfR,
           out = "../results/tables/supp_table_2_sTfR_regressions_coeffs_OLS.html",
           intercept.bottom = FALSE,
@@ -3708,10 +3721,11 @@ stargazer(lm7_pre_menop_sTfR, lm7_post_menop_sTfR,lm7_men_sTfR,
           digits = 3)
 ```
 
+-
 
 ### Supp Figure 3:  Visualizations of the effects of donation history on sTRF 
 
-```{r , warning=FALSE}
+```{r, warning=FALSE}
 
 plt_1 <-blood_data_summary_final %>%
   dplyr::select(donor, group2, TransferrinR, 
@@ -3845,7 +3859,6 @@ cowplot::save_plot("../results/figures/Supp_Figure_3_sTFR.png",plt2, base_height
 Self-assessed health was measured using the following question:
 
 * How is your health in general?
-
   * Poor, satisfactory, good, very good, excellent
 
 We use ordinal logistic regression analysis [@Bender1997] to analyze the relationship between self-assessed health and ferritin. We test whether Ferritin level is a significant predictor of self-assessed health  when controlling for age, BMI, CRP, number of donations in the last two years, and physical activity. We run both a frequentist analysis and a Bayesian analysis. Results from the frequentist analysis suggest that Ferritin is not a significant predictor of self-perceived health in blood donors. According to the Bayesian analysis, the data dees not provide strong evidence in favor of ferritin co-varying with self-perceived health. 
@@ -3948,7 +3961,7 @@ ggplot2::ggsave("../results/figures/figure_4_health.png", plt,  height = 8.5 * 1
 
 ## Ordinal regression analysis
 
-To analyze the answers to the self-assessed health question properly, we use an ordinal proportional odds model or ordinal logistic model. This type of model is used to model outome variables that are ordered and represent an unknown latent variable. Here self-reported health is the ordered outcome variable we are trying to predict. Additional information about ordinal models in epidemiology can be found in [@abreu2009ordinal]. Because there are few donors who reported only satisfactory health, we pool together the data from pre-menopausal and post-menopausal women into a single women's group.
+To analyze the answers to the self-assessed health question properly, we use an ordinal proportional odds model or ordinal logistic model. This type of model is used to model outcome variables that are ordered and represent an unknown latent variable. Here self-reported health is the ordered outcome variable we are trying to predict. Additional information about ordinal models in epidemiology can be found in [@abreu2009ordinal]. Because there are few donors who reported only satisfactory health, we pool together the data from pre-menopausal and post-menopausal women into a single women's group.
 
 An example of how to interpret the odds-ratio that are computed from the regression coefficients can be found here [here](https://www.google.com/url?sa=t&rct=j&q=&esrc=s&source=web&cd=9&cad=rja&uact=8&ved=2ahUKEwjg1PO9g_TcAhVhD5oKHSt1BVYQFjAIegQIABAC&url=http%3A%2F%2Fweb.pdx.edu%2F~newsomj%2Fcdaclass%2Fho_ordinal%2520regression.pdf&usg=AOvVaw2NRuZfLiLnX4bUfqOPVUne). 
 
@@ -4152,9 +4165,11 @@ brm_coeffs %>%
     kable()
 ```
 
-An increase in 1 point of BMI age results in a `r round(brm_coeffs %>% filter(Regressor == "age") %>% magrittr::extract2("Odds.Ratio")-1,3)*-100`% decreases in your odds by of feeling in very good or excellent compared to satisfactory or good. An increase in one scale point in exercise frequency results in an increase of `r round(brm_coeffs %>% filter(Regressor == "physical_act_freq_n") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% of your odds of felling in excellent health compared to very good, good or satisfactory health. 
+* An increase in 1 point of BMI age results in a `r round(brm_coeffs %>% filter(Regressor == "age") %>% magrittr::extract2("Odds.Ratio")-1,3)*-100`% decreases in your odds by of feeling in very good or excellent compared to satisfactory or good. 
 
-Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a `r round(brm_coeffs %>% filter(Regressor == "log_Ferritin") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
+* An increase in one scale point in exercise frequency results in an increase of `r round(brm_coeffs %>% filter(Regressor == "physical_act_freq_n") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% of your odds of felling in excellent health compared to very good, good or satisfactory health. 
+
+* Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a `r round(brm_coeffs %>% filter(Regressor == "log_Ferritin") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
 
 ##### Bootstrapped CIs
 
@@ -4301,7 +4316,7 @@ stan_ess(ordinal_fit_B_women$fit)
 
 ##### Model comparison 
 
-Model comparison using Bayes Factors in non trivial when using ordinal models. We use LOO (leave-One-OUt cross validation) as is shown [here](https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/). [@vehtari2017practical] is the main reference. 
+Model comparison using Bayes Factors in non trivial when using ordinal models. We use LOO (Leave-One-Out cross validation) as is shown [here](https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/). [@vehtari2017practical] is the main reference. 
 We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor. 
 
 ```{r message=FALSE, warning=FALSE, }
@@ -4442,9 +4457,11 @@ brm_coeffs %>%
     kable()
 ```
 
-Results show that an increase in 1 point of BMI age results in a `r round(brm_coeffs %>% filter(Regressor == "BMI") %>% magrittr::extract2("Odds.Ratio")-1,3)*-100` % decrease in your odds by of feeling in very good pr excellent compared to satisfactory or good. An increase in one scale point in exercise frequency results in an increase of `r round(brm_coeffs %>% filter(Regressor == "physical_act_freq_n") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% of your odds of felling in excellent health compared to very good, good or satisfactory health. 
+* An increase in 1 point of BMI age results in a `r round(brm_coeffs %>% filter(Regressor == "BMI") %>% magrittr::extract2("Odds.Ratio")-1,3)*-100` % decrease in your odds by of feeling in very good pr excellent compared to satisfactory or good. 
 
-Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a `r round(brm_coeffs %>% filter(Regressor == "log_Ferritin") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
+* An increase in one scale point in exercise frequency results in an increase of `r round(brm_coeffs %>% filter(Regressor == "physical_act_freq_n") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% of your odds of felling in excellent health compared to very good, good or satisfactory health. 
+
+* Once BMI, age, CRP, donation activity, smoking and physical activity are controlled for, there is a `r round(brm_coeffs %>% filter(Regressor == "log_Ferritin") %>% magrittr::extract2("Odds.Ratio")-1,3)*100`% increase in the odds of rating your health as good, very good or excellent compared to satisfactory for each 2-fold increase in Ferritin levels. This increase is not statistically significant.
 
 ##### Bootstrapped CIs
 
@@ -4582,7 +4599,7 @@ stan_ess(ordinal_fit_B_men$fit)
 
 ##### Model comparison 
 
-We use LOO (leave-One-OUt cross validation). We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor. 
+We use LOO (Leave-One-Out cross validation). We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor. 
 
 ```{r message=FALSE, warning=FALSE}
 ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log_CRP + smoking + don_ct   +
@@ -4599,10 +4616,39 @@ LOO(ordinal_fit_restricted, ordinal_fit_B_men)
 
 Adding Ferritin does not improve the fit between the data and the model. 
 
-## Tables and Figures
+
+## Supplementary Tables 
+
+### Ordinal logistic regression 
+
+```{r , results='asis'}
+
+stargazer(fit_women, fit_men,
+          out = "../results/tables/supp_table_3_frequentist_health.html",
+          intercept.bottom = FALSE,
+          title = "Ordinal logistic regression",
+          type = "html",
+          single.row = TRUE,
+          ci = TRUE,
+          ci.custom = CI_regression_health,
+          coef = regress_coeff_health,
+          p.auto = FALSE,
+          header = FALSE,
+          covariate.labels =c("Health > Good", "Health > y VeGood", "Health > Excellent", "Menopausal status",
+                          "Age",  "BMI", "CRP", "Smoking(yes)", "Nb donations (2 years)",
+                          "Nb of days since last donation",
+                        "Physical activity (daily amount)", "Physical activity (frequency)", "Ferritin"),
+          dep.var.caption   = "How has your health been in general?", 
+          dep.var.labels.include = FALSE,
+          column.labels = c("Women", "Men"),
+          # column.separate = c(2, 2,2),
+          model.numbers= FALSE,
+          report=('vcsp'))
+```
 
 
-## Supplementary Table / Figure
+### Bayesian ordinal logistic regression
+
 
 ```{r, results='asis'}
 bayes_regression_coeffs_women %>% 
@@ -4631,29 +4677,8 @@ bayes_regression_coeffs_women %>%
           digits = 2)  
 ```
 
-```{r , results='asis'}
-stargazer(fit_women,fit_men,
-          out = "../results/tables/supp_table_3_frequentist_health.html",
-          intercept.bottom = FALSE,
-          title = "Ordinal logistic regression",
-          type = "html",
-          single.row = TRUE,
-          ci = TRUE,
-          ci.custom = CI_regression_health,
-          coef = regress_coeff_health,
-          p.auto = FALSE,
-          header = FALSE,
-          covariate.labels =c("Health > Good", "Health > y VeGood", "Health > Excellent", "Menopausal status",
-                          "Age",  "BMI", "CRP", "Smoking(yes)", "Nb donations (2 years)",
-                          "Nb of days since last donation",
-                        "Physical activity (daily amount)", "Physical activity (frequency)", "Ferritin"),
-          dep.var.caption   = "How has your health been in general?", 
-          dep.var.labels.include = FALSE,
-          column.labels = c("Women", "Men"),
-          # column.separate = c(2, 2,2),
-          model.numbers= FALSE,
-          report=('vcsp'))
-```
+
+### Summary table
 
 
 ```{r}
