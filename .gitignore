@@ -1,5 +1,22 @@
+# packrat dirs
+/packrat/init.R
+
+# R files
+.Rproj.user
+.Rhistory
+.Rprofile
+
 #  Data directory
 /data/
 
 # Results directory
 /results/
+
+# index_files
+/src/index_files/figure-markdown_github/
+
+#.md files
+/src/*.md
+
+packrat/lib*/
+packrat/src/

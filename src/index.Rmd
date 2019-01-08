@@ -15,7 +15,7 @@ The analysis has  three parts. In a first part we describe the study population 
 ```{r setup, , message = FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
-library(janitor)
+# library(janitor)
 library(tableone)
 library(stargazer)
 library(gridExtra)
@@ -23,7 +23,7 @@ library(cowplot)
 library(broom)
 library(GGally)
 library(ggfortify)
-library(sjPlot)
+# library(sjPlot)
 library(knitr)
 library(lubridate)
 library(HDInterval)
@@ -31,8 +31,7 @@ library(car)
 library(relaimpo)
 library(sfsmisc)
 library(MASS)
-library(kableExtra)
-library(sfsmisc)
+# library(kableExtra)
 library(brms)
 library(rstan)
 library(rms)
@@ -41,11 +40,8 @@ library(tidybayes)
 library(ordinal)
 library(sjmisc)
 library(sjlabelled)
-library(lazerhawk)
+# library(lazerhawk)
 ```
-
-
-
 
 
 # Data loading and preparation
@@ -75,8 +71,10 @@ blood_data_summary <- indiv_donations_data %>%
   group_by(donor) %>% 
   summarise(sex=first(gender)) 
 
-# Get values for first study donation with the required measurements donation (regardless of donation type)
-# We remove events with no Ferritin and hb_v to be inline with from when the nb of previous donations were counted.
+# Get values for first study donation with the required measurements 
+# donation (regardless of donation type)
+# We remove events with no Ferritin and hb_v to be inline with from when 
+# the nb of previous donations were counted.
 
 
 blood_values_init <- indiv_donations_data %>% 
@@ -235,7 +233,7 @@ We remove `r blood_data_summary_final %>% filter((group != "Men" & is.na(QR83)))
 
 ```{r}
 nb_removed_questionnaire <- nb_removed_questionnaire +
-                            blood_data_summary_final %>% filter((group != "Men" & is.na(QR83))) %>% nrow() 
+                            blood_data_summary_final %>% filter((group != "Men" & is.na(QR83))) %>% nrow 
 
 blood_data_summary_final <- blood_data_summary_final %>% 
   filter(!(group != "Men" & is.na(QR83)))
@@ -364,7 +362,8 @@ blood_data_summary_final %>%
 
 blood_data_summary_final <- blood_data_summary_final %>% 
   dplyr::select(donor,group, sex, age,TwoYearsFromStartCount_FB,DaysToPreviousFB, Hb_v,
-       Ferritin, CRP, TransferrinR, MCV, DaysToPreviousFB,QR40,QR44, QR46, QR45, QR48, QR49, QR50,QR51, QR52, QR53, 
+       Ferritin, CRP, TransferrinR, MCV, DaysToPreviousFB,QR40,QR44, QR46, QR45, QR48,
+       QR49, QR50,QR51, QR52, QR53, 
        QR17, QR54, QR60, QR61, iron_comp_c, BMI,QR83, iron_supp) %>% 
   rename(red_meat = QR40,
          fruit_berries = QR44,
@@ -448,7 +447,8 @@ blood_data_summary_final <-
                                         physical_act_daily == "15_30mn" ~ 1,
                                         physical_act_daily == "30_60mn" ~ 2,
                                         TRUE ~ 3),
-         physical_act_freq_n = case_when(physical_act_freq == "never" | physical_act_freq == "less_than_monthly" ~ 0,
+         physical_act_freq_n = case_when(physical_act_freq == "never" | 
+                                           physical_act_freq == "less_than_monthly" ~ 0,
                                         physical_act_freq == "1_2_monthly" ~ 1,
                                         physical_act_freq == "1_weekly" ~ 2,
                                         TRUE ~ 3))
@@ -472,7 +472,8 @@ We code iron supplementation as a linear variable with a 4 grade scale:
 
 # Recode food and non-alcoholic beverages
 food <- blood_data_summary_final %>% 
-  dplyr::select(donor,red_meat_n, fruit_berries_n,vegetables_n,fruit_juices_n,milk_n, coffee_n, tea_n ) %>% 
+  dplyr::select(donor,red_meat_n, fruit_berries_n,vegetables_n,
+                fruit_juices_n,milk_n, coffee_n, tea_n ) %>% 
   gather(key = key, value =  value, -donor) %>% 
   mutate(value = case_when(value == 1 ~ "never",
     value == 2 ~ "less_than_once_weekly",
@@ -514,12 +515,14 @@ blood_data_summary_tbl <- blood_data_summary_final %>%
     TRUE ~ "None"),
     iron_supplementation = ordered(iron_supplementation, 
                   levels = c("None",   "Less than half", "About half","All or almost all")),
-    physical_act_freq = case_when(physical_act_freq == "never" | physical_act_freq == "less_than_monthly" ~ "less_than_monthly",
+    physical_act_freq = case_when(physical_act_freq == "never" | 
+                                    physical_act_freq == "less_than_monthly" ~ "less_than_monthly",
                                         physical_act_freq == "1_2_monthly" ~ "1_2_monthly",
                                         physical_act_freq == "1_weekly" ~ "1_weekly",
                                         TRUE ~ "twice_weekly_or_more"),
     physical_act_freq = ordered(physical_act_freq, 
-                  levels = c("less_than_monthly",   "1_2_monthly", "1_weekly","twice_weekly_or_more"))) 
+                                levels = c("less_than_monthly","1_2_monthly", 
+                                            "1_weekly","twice_weekly_or_more"))) 
     
 ```
 
@@ -527,29 +530,35 @@ blood_data_summary_tbl <- blood_data_summary_final %>%
 
 
 ```{r}
-myVars <- c( "age", "BMI" ,"smoking", "pregnancy", "Hb_v",  "Ferritin", "TransferrinR",  "CRP", "TwoYearsFromStartCount_FB", 
-             "DaysToPreviousFB",  "iron_supplementation", "red_meat", "vegetables",  "fruit_berries", "milk", 
-            "fruit_juices", "coffee", "tea", "beer",  "wine", "liquor", "physical_act_daily",  "physical_act_freq")
+myVars <- c( "age", "BMI" ,"smoking", "pregnancy", "Hb_v",  "Ferritin", "TransferrinR",  "CRP",
+             "TwoYearsFromStartCount_FB",  "DaysToPreviousFB",  "iron_supplementation", "red_meat", 
+             "vegetables",  "fruit_berries", "milk",  "fruit_juices", "coffee", "tea", "beer", 
+             "wine", "liquor", "physical_act_daily",  "physical_act_freq")
 
 non_normal_vars <- c("DaysToPreviousFB", "Ferritin", "TransferrinR", "CRP", "BMI")
 
-summary_table <- CreateTableOne(data = blood_data_summary_tbl %>% mutate(group = dplyr::recode(group, Pre_menopause_women = "Pre-menopausal women", 
-                                                                                               Post_menopause_women = "Post-menopausal women")) ,
+summary_table <- CreateTableOne(data = blood_data_summary_tbl %>% 
+                                      mutate(group = dplyr::recode(group, 
+                                                     Pre_menopause_women = "Pre-menopausal women", 
+                                                     Post_menopause_women = "Post-menopausal women")) ,
                                 vars = myVars, strata = "group",test = FALSE)
 
 ```
 
 ```{r}
 
-tab3Mat <- print(summary_table, nonnormal = non_normal_vars, quote = FALSE, noSpaces = TRUE, printToggle = FALSE)
+tab3Mat <- print(summary_table, nonnormal = non_normal_vars, quote = FALSE, 
+                 noSpaces = TRUE, printToggle = FALSE)
+
+## Save to a CSV file
+write.csv(tab3Mat, file = "../results/tables/Table_1_population.csv")
 
 tab3Mat %>% 
   kable()
 
-## Save to a CSV file
-write.csv(tab3Mat, file = "../results/tables/Table_1_population.csv")
 ```
 
+- 
 
 ## Paired group differences
 
@@ -615,7 +624,8 @@ for (excluded_group in levels(blood_data_summary_final$group)){
   if(!exists("t_test_non_norm")){
     t_test_non_norm <-  get_mann_Whit_test_norm(blood_data_summary_final,excluded_group )
   }else{
-    t_test_non_norm <-bind_rows(t_test_non_norm,  get_mann_Whit_test_norm(blood_data_summary_final,excluded_group ))
+    t_test_non_norm <-bind_rows(t_test_non_norm,  
+                                get_mann_Whit_test_norm(blood_data_summary_final,excluded_group ))
   }
  
 }
@@ -656,12 +666,14 @@ get_chisqr_test_cat <- function(data, excluded_group){
       iron_comp_c == 0 ~ "None",
       TRUE ~ "NA")) %>% 
     dplyr::select(donor,group, smoking,iron_comp_f, physical_act_freq, physical_act_daily) %>%  
-    mutate(physical_act_freq = case_when(physical_act_freq == "never" | physical_act_freq == "less_than_monthly" ~ "less_than_monthly",
+    mutate(physical_act_freq = case_when(physical_act_freq == "never" | 
+                                        physical_act_freq == "less_than_monthly" ~ "less_than_monthly",
                                         physical_act_freq == "1_2_monthly" ~ "1_2_monthly",
                                         physical_act_freq == "1_weekly" ~ "1_weekly",
                                         TRUE ~ "twice_weekly_or_more"),
     physical_act_freq = ordered(physical_act_freq, 
-                  levels = c("less_than_monthly", "1_2_monthly", "1_weekly","twice_weekly_or_more"))) %>% 
+                  levels = c("less_than_monthly", "1_2_monthly", 
+                             "1_weekly","twice_weekly_or_more"))) %>% 
     full_join(food, by = "donor") %>% 
     full_join(alcohol, by = "donor") %>% 
     filter(group != excluded_group) %>% 
@@ -705,7 +717,8 @@ for (excluded_group in levels(blood_data_summary_final$group)){
   if(!exists("chi_sqr_test")){
     chi_sqr_test <-  get_chisqr_test_cat(blood_data_summary_final,excluded_group )
   }else{
-    chi_sqr_test <-bind_rows(chi_sqr_test,  get_chisqr_test_cat(blood_data_summary_final,excluded_group ))
+    chi_sqr_test <-bind_rows(chi_sqr_test,
+                             get_chisqr_test_cat(blood_data_summary_final,excluded_group ))
   }
  
 }
@@ -747,19 +760,16 @@ final_p_values <- all_stat_test %>%
                                                  "Hemoglobin",  "Ferritin",  "CRP",  "sTfR",
                               "Nb donations in last 2 years", "Nb of days since last donation",    
              "Iron supplementation", "Red meat", "vegetables",  "Fruit and berries", "milk" , 
-            "Fruit juices", "coffee", "tea", "beer",  "wine", "liquor", "Exercise frequency", "Daily physical activity"))) %>% 
+            "Fruit juices", "coffee", "tea", "beer",  "wine", "liquor", "Exercise frequency", 
+            "Daily physical activity"))) %>% 
   arrange(variable) %>% 
   mutate(variable = as.character(variable))   
 
 ```
 
 
-```{r}
-final_p_values %>% 
-  kable()
-```
 
-```{r , warning=FALSE}
+```{r warning=FALSE, results='asis'}
 
 # Saving resuls of statistical tests to html file
 
@@ -772,6 +782,7 @@ stargazer(final_p_values, type = "html",
           digits = 5)
 ```
 
+- 
 
 # Results - Distributions of hemoglobin, ferritin and sTfR
 
@@ -796,6 +807,7 @@ threshold <- data.frame(group = c("Men", "Pre_menopause_women", "Post_menopause_
 
 ```
 
+-
 
 ### Overall incidence of low hemoglobin, low ferritin and high sTfR
 
@@ -848,7 +860,7 @@ data %>%
 
 ```
 
-
+-
 
 ### Overlap of low ferritin and high sTfR 
 
@@ -887,6 +899,7 @@ data %>%
 
 ```
 
+-
 
 ### Overlap between anemia (low hemoglobin) and iron deficiency
 
@@ -921,6 +934,7 @@ tab3Mat %>%
 
 ```
 
+-
 
 ### Further computations for discussion
 
@@ -1007,6 +1021,7 @@ blood_data_summary_final %>%
   kable()
 ```
 
+-
 
 ### CRP levels for anemic donors with and without ID
 
@@ -1049,8 +1064,11 @@ point_size = 1
     blood_data_summary_final %>%
       group_by(group) %>% 
       summarise(N = n()) %>% 
-      mutate(group_N = case_when(group == "Pre_menopause_women" ~ paste("Pre-menopausal women\n","N = ",N,sep="" ),
-                       group == "Post_menopause_women" ~ paste("Post-menopausal women\n","N = ",N,sep="" ),
+      mutate(group_N = case_when(group == "Pre_menopause_women" ~ paste("Pre-menopausal women\n",
+                                                                        "N = ",
+                                                                        N,sep="" ),
+                       group == "Post_menopause_women" ~ paste("Post-menopausal women\n","N = ",
+                                                               N,sep="" ),
                        group == "Men" ~ paste("Men\n","N = ",N,sep="" ),
                        TRUE~ "NA")) 
   
@@ -1084,7 +1102,8 @@ plt <- blood_data_summary_final %>%
   geom_point(aes(color = Hb_v), size = point_size, alpha = 0.5) +
   geom_point(aes(alpha = anemia), shape = 1, color = "red", size = point_size*1.1 ) +
   geom_point(data = new_donors_data, shape = 8, size = point_size, color = "orange") +
-  geom_point(data = new_donors_data, aes(alpha = anemia), shape = 1, color = "red", size = point_size*1.5) +
+  geom_point(data = new_donors_data, aes(alpha = anemia), shape = 1, color = "red", 
+             size = point_size*1.5) +
   scale_color_viridis_c(direction = -1, option="D", trans = "log",
                         limits = c(low_Hb, high_Hb),
                         breaks=c(110, 117,134, 150, 175)) +
@@ -1238,14 +1257,14 @@ In addition, we used relative importance analysis to estimate the average propor
 The regressors were entered as follows in the regression models for sTfR and ferritin:
 
 * Continuous variables were entered as continuous predictors
-  * age, number of donations in last two years, nb of days since last donation, CRP, BMI
+    * age, number of donations in last two years, nb of days since last donation, CRP, BMI
   
 * Binary variables were entered as categorical (but coded as numerical for relative importance):
-  * Smoking, pregnancy
+    * Smoking, pregnancy
   
 * Ordinal variables were coded on a linear scale and entered as continuous [(Reference)](https://www3.nd.edu/~rwilliam/stats3/OrdinalIndependent.pdf)
-  * Iron supplementation 
-  * All dietary intake
+    * Iron supplementation 
+    * All dietary intake
   
 We compute both coefficients and standardized coefficients (with all dependent and independent variables standardized) for robust regression and only coefficients for OLS regression. We present robust coefficients and their bootstrapped BCa 95% confidence intervals in Table 1 (ferritin) and  Table 2 (sTfR), robust standardized coefficients, their bootstrapped distribution and BCa 95% confidence intervals in Figure 2.A and non-standardized OLS regression coefficients in Supplementary Table 1 (Ferritin) and 2 (sTfR). 
 
@@ -1268,20 +1287,20 @@ blood_data_summary_reg <- blood_data_summary_final %>%
 Data transformations:
 
 * Log transformed variables: 
-  * Ferritin
-  * sTfR
-  * CRP 
+    * Ferritin
+    * sTfR
+    * CRP 
   
 * Age is divided by 5 to simplify coeff interpretation
 * Number of days before donation is transformed as $log\_last\_don = log(last\_don)/log(2)$ to help with the interpretation of coefficients. 
-  * An increase in one of the transformed variable is equivalent to a doubling of the number of days since last donation.
+    * An increase in one of the transformed variable is equivalent to a doubling of the number of days since last donation.
 
 * Standardization:
-  * Standardized coefficients: 
-    * All dependent and independent variables were standardized
+    * Standardized coefficients: 
+        * All dependent and independent variables were standardized
       
-  * Coefficients:
-    * All dependent variables entered as continuous varaibles are centered but not scaled. 
+    * Coefficients:
+        * All dependent variables entered as continuous varaibles are centered but not scaled. 
 
 ## Pre-menopausal women
 ### Data pre-processing
@@ -1302,7 +1321,8 @@ test_data_std <- blood_data_summary_reg %>%
   
 test_data_std <- blood_data_summary_reg %>% 
   filter(group == "Pre_menopause_women") %>% 
-  dplyr::select(donor, log_ferr, TransferrinR, age, log_CRP, BMI, don_ct,log_last_don,smoking, pregnancy, iron, log_sTfR) %>%
+  dplyr::select(donor, log_ferr, TransferrinR, age, log_CRP, BMI, don_ct,log_last_don,
+                smoking, pregnancy, iron, log_sTfR) %>%
   mutate(age = age / 5, 
          age = scale(age, scale = FALSE)[,1],
          log_CRP = scale(log_CRP, scale = FALSE)[,1],
@@ -1324,7 +1344,8 @@ test_data_std <- blood_data_summary_reg %>%
 ```{r}
 
 ggpairs(test_data_std, 
-        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2",
+                    "log_last_don", "smoking","iron"),
          lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
                       combo = wrap("facethist", binwidth = 0.5)),
         progress = FALSE)
@@ -1333,7 +1354,8 @@ ggpairs(test_data_std,
 ```{r}
 
 ggpairs(test_data_std, 
-        columns = c("log_ferr", "pregnancy",  "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
+        columns = c("log_ferr", "pregnancy",  "red_meat_n", "vegetables_n", 
+                    "fruit_berries_n", "milk_n", "fruit_juices_n"),
          lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
                       combo = wrap("facethist", binwidth = 0.5)),
         progress = FALSE)
@@ -1353,7 +1375,9 @@ ggpairs(test_data_std,
 
 ```{r }
 
-lm7_pre_menop_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+lm7_pre_menop_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + 
+                         log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n +
+                         fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
 
 ```
 
@@ -1365,7 +1389,8 @@ We create regression diagnostic plots in order to identify putative influential 
 ```{r, message=FALSE, warning = FALSE}
 test_data_std %>%
   rowid_to_column("ID") %>%
-  mutate(outlier = ifelse(ID == 547 | ID == 561 | ID == 297 | ID == 59 | ID == 723, TRUE, FALSE)) -> test_data_std
+  mutate(outlier = ifelse(ID == 547 | ID == 561 | ID == 297 | ID == 59 | ID == 723, 
+                          TRUE, FALSE)) -> test_data_std
 
 autoplot(lm7_pre_menop_std, data = test_data_std, which = c(1:6), ncol = 3,  label.n = 5,
          alpha = 0.7, shape = 1, colour = "outlier") + 
@@ -1395,7 +1420,9 @@ These plots identify several potentially problematic observations, therefore we 
 # https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
 
 # Run model 
-robust_mdl_pre_menop_w <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+robust_mdl_pre_menop_w <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + 
+                                log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n +
+                                fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
 
 #Tidy output
 tidy_mdl <- tidy(robust_mdl_pre_menop_w)
@@ -1429,6 +1456,7 @@ tidy_model_w_pre <- tidy(robust_mdl_pre_menop_w)
 #### Model outputs and interpretation
 
 ```{r  warning=FALSE, results='asis'}
+
 stargazer( robust_mdl_pre_menop_w, lm7_pre_menop_std,
           title = "Multiple linear regressions - Pre-menopausal women",
           intercept.bottom = FALSE,
@@ -1443,8 +1471,9 @@ stargazer( robust_mdl_pre_menop_w, lm7_pre_menop_std,
           model.numbers = FALSE,
           column.labels = c("Robust", "OLS"),
           covariate.labels =  c("Age", "BMI", "CRP", "Smoking(yes)",  "Pregnancy(Yes)",
-                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
-                        "Iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
+                       "Nb donations (2 years)","(Nb donations (2 years))²", 
+                       "Days since last donation",  "Iron supplementation", "Red meat",
+                       "Vegetables", "Fruit and Berries", "Milk",
                          "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
           star.cutoffs = c(0.05, 0.01, 0.001),
           report=('vcp'))
@@ -1468,7 +1497,9 @@ The relative importance analyses are run only on regressors that are consistentl
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
-lm7_num_std <- lm(log_ferr ~ age + BMI + don_ct + don_ct_2 + log_last_don + smoking + iron + red_meat_n + wine_n + beer_n, test_data_2_std)
+lm7_num_std <- lm(log_ferr ~ age + BMI + don_ct + don_ct_2 + log_last_don + 
+                    smoking + iron + red_meat_n +
+                    wine_n + beer_n, test_data_2_std)
 
 bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
 
@@ -1500,7 +1531,10 @@ ggpairs(test_data_std,
 #### OLS
 
 ```{r}
-lm7_pre_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+lm7_pre_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + 
+                          log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + 
+                          fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, 
+                        test_data_std )
 
 ```
 
@@ -1538,7 +1572,11 @@ pre_menop_diag_plot
 # https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
 
 # Run model 
-robust_mdl_sTfR_pre_menop_w <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+robust_mdl_sTfR_pre_menop_w <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + 
+                                     don_ct_2 +  log_last_don + iron + red_meat_n + vegetables_n + 
+                                     fruit_berries_n + milk_n +  fruit_juices_n +  coffee_n +  
+                                     tea_n + beer_n + wine_n + liquor_n, test_data_std, 
+                                      maxit = 40)
 
 #Tidy output
 tidy_mdl <- tidy(robust_mdl_sTfR_pre_menop_w)
@@ -1567,6 +1605,7 @@ mdl_sTfR_pre_menop_w <- tidy_mdl %>%
 #### Model outputs and interpretation
 
 ```{r warning=FALSE, results='asis'}
+
 stargazer(robust_mdl_sTfR_pre_menop_w, lm7_pre_menop_sTfR, 
           title = "Pre-menopausal women",
           intercept.bottom = FALSE,
@@ -1581,9 +1620,10 @@ stargazer(robust_mdl_sTfR_pre_menop_w, lm7_pre_menop_sTfR,
           model.numbers = FALSE,
           column.labels = c("Robust", "OLS"),
           covariate.labels =  c("Age", "BMI", "CRP", "Smoking(yes)",  "Pregnancy(Yes)",
-                       "Nb donations (2 years)","(Nb donations (2 years))²", "Days since last donation", 
-                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
-                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
+                       "Nb donations (2 years)","(Nb donations (2 years))²", 
+                       "Days since last donation",  "iron supplementation", "Red meat",
+                       "Vegetables", "Fruit and Berries", "Milk", "Fruit Juices", 
+                       "Coffee","Tea", "Beer", "Wine" , "Liquor"),
           star.cutoffs = c(0.05, 0.01, 0.001),
           report=('vcp'))
           
@@ -1600,7 +1640,9 @@ Relative importance analyses are run only on regressors that are consistently si
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
-lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking  + red_meat_n + wine_n + beer_n + milk_n, test_data_2_std)
+lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking +
+                    red_meat_n + wine_n + 
+                    beer_n + milk_n, test_data_2_std)
 
 bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
 
@@ -1658,7 +1700,8 @@ test_data_std <- blood_data_summary_reg %>%
 ```{r}
 
 ggpairs(test_data_std, 
-        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", 
+                    "log_last_don", "smoking","iron"),
          lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
                       combo = wrap("facethist", binwidth = 0.5)),
         progress = FALSE)
@@ -1667,7 +1710,8 @@ ggpairs(test_data_std,
 ```{r }
 
 ggpairs(test_data_std, 
-        columns = c("log_ferr", "pregnancy", "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
+        columns = c("log_ferr", "pregnancy", "red_meat_n", "vegetables_n", 
+                    "fruit_berries_n", "milk_n", "fruit_juices_n"),
          lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
                       combo = wrap("facethist", binwidth = 0.5)),
         progress = FALSE)
@@ -1687,7 +1731,10 @@ ggpairs(test_data_std,
 
 ```{r }
 
-lm7_post_menop_std <- lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+lm7_post_menop_std <- lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + 
+                           log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + 
+                           fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n,
+                         test_data_std )
 
 ```
 
@@ -1697,7 +1744,8 @@ lm7_post_menop_std <- lm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  +
 ```{r, warning=FALSE}
 test_data_std %>%
   rowid_to_column("ID") %>%
-  mutate(outlier = ifelse(ID == 48 | ID == 157 | ID == 430 | ID == 445 | ID == 448, TRUE, FALSE)) -> test_data_std
+  mutate(outlier = ifelse(ID == 48 | ID == 157 | ID == 430 | ID == 445 | ID == 448, 
+                          TRUE, FALSE)) -> test_data_std
 
 autoplot(lm7_post_menop_std, data = test_data_std, which = c(1:6), ncol = 3, 
           label.n = 5,
@@ -1724,10 +1772,11 @@ There are 4 observations that are seem to be problematic, so we also run robust 
 
 ```{r, warning =  FALSE}
 
-# https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-
 # Run model 
-robust_mdl_post_menop_w <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+robust_mdl_post_menop_w <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + 
+                                 log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n +
+                                 fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std,
+                               maxit = 40)
 
 #Tidy output
 tidy_model_w_post <- tidy(robust_mdl_post_menop_w)
@@ -1756,6 +1805,7 @@ mdl_post_menop_w <- tidy_model_w_post %>%
 #### Model outputs and interpretation
 
 ```{r warning=FALSE, results='asis'}
+
 stargazer(robust_mdl_post_menop_w, lm7_post_menop_std, 
           title = "Post-menopausal women",
           intercept.bottom = FALSE,
@@ -1790,7 +1840,8 @@ test_data_2_std<- test_data_std %>%
   mutate(smoking = ifelse(smoking == "no", 0,1),
          pregnancy = ifelse(pregnancy == "no", 0,1)) 
 
-lm7_num_std <- lm(log_ferr~ age + BMI + don_ct + don_ct_2+ log_last_don + smoking + iron + red_meat_n + wine_n + beer_n, test_data_2_std)
+lm7_num_std <- lm(log_ferr~ age + BMI + don_ct + don_ct_2+ log_last_don + smoking + iron + 
+                    red_meat_n + wine_n + beer_n, test_data_2_std)
 
 
 bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
@@ -1823,7 +1874,10 @@ ggpairs(test_data_std,
 
 # we run the sTfR mdoels here to take advanatge of the pre-processing
 
-lm7_post_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+lm7_post_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + 
+                           log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + 
+                           fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, 
+                         test_data_std )
 
 ```
 
@@ -1832,7 +1886,8 @@ lm7_post_menop_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  +
 ```{r, warning=FALSE}
 test_data_std %>%
   # rowid_to_column("ID") %>%
-  mutate(outlier = ifelse(ID == 249 | ID == 174 | ID == 200 | ID == 217 | ID == 208, TRUE, FALSE)) -> test_data_std
+  mutate(outlier = ifelse(ID == 249 | ID == 174 | ID == 200 | ID == 217 | ID == 208, 
+                          TRUE, FALSE)) -> test_data_std
 
 autoplot(lm7_post_menop_sTfR, data = test_data_std, which = c(1:6), ncol = 3, 
           label.n = 5,
@@ -1859,10 +1914,11 @@ There are several problematic observations, so we also run robust regression.
 
 ```{r, warning =  FALSE}
 
-# https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-
 # Run model 
-robust_mdl_sTfR_post_menop_w <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+robust_mdl_sTfR_post_menop_w <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking + pregnancy  + don_ct + don_ct_2 + 
+                                      log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + 
+                                      fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, 
+                                    maxit = 40)
 
 #Tidy output
 tidy_mdl <- tidy(robust_mdl_sTfR_post_menop_w)
@@ -1925,7 +1981,9 @@ This analysis is run only on regressors that are consistently significant in at 
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
-lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking  + red_meat_n + wine_n + beer_n + milk_n, test_data_2_std)
+lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking  + 
+                    red_meat_n + wine_n + beer_n + milk_n, 
+                  test_data_2_std)
 
 bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
 
@@ -1979,7 +2037,8 @@ test_data_std <- blood_data_summary_reg %>%
 ```{r }
 
 ggpairs(test_data_std, 
-        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+        columns = c("log_ferr", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", 
+                    "smoking","iron"),
          lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
                       combo = wrap("facethist", binwidth = 0.5)),
         progress = FALSE)
@@ -1989,7 +2048,8 @@ ggpairs(test_data_std,
 ```{r }
 
 ggpairs(test_data_std, 
-        columns = c("log_ferr", "red_meat_n", "vegetables_n", "fruit_berries_n", "milk_n", "fruit_juices_n"),
+        columns = c("log_ferr", "red_meat_n", "vegetables_n", "fruit_berries_n", 
+                    "milk_n", "fruit_juices_n"),
          lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
                       combo = wrap("facethist", binwidth = 0.5)),
         progress = FALSE)
@@ -2009,7 +2069,10 @@ ggpairs(test_data_std,
 
 ```{r }
 
-lm7_men_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+lm7_men_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 + 
+                  log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + 
+                  milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, 
+                 test_data_std )
 ```
 
 
@@ -2019,7 +2082,8 @@ lm7_men_std <-lm(log_ferr ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 +
 ```{r warning=FALSE, message=FALSE}
 test_data_std %>%
   rowid_to_column("ID") %>%
-  mutate(outlier = ifelse(ID == 433 | ID == 449 | ID == 583 | ID == 4 | ID == 158 | ID == 319, TRUE, FALSE)) -> test_data_std
+  mutate(outlier = ifelse(ID == 433 | ID == 449 | ID == 583 | ID == 4 | ID == 158 | ID == 319, 
+                          TRUE, FALSE)) -> test_data_std
 
 autoplot(lm7_men_std, data = test_data_std, which = c(1:6), ncol = 3,  label.n = 5,
          shape = 1, alpha = 0.7, colour = "outlier") + 
@@ -2049,7 +2113,10 @@ There are seevral problemetic observations, so we also run robust regressions.
 # https://stats.stackexchange.com/questions/205614/p-values-and-significance-in-rlm-mass-package-r?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
 
 # Run model 
-robust_mdl_men <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+robust_mdl_men <- rlm(log_ferr ~ age + BMI + log_CRP + smoking + don_ct + don_ct_2 + 
+                      log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + 
+                      milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, 
+                      test_data_std, maxit = 40)
 
 #Tidy output
 tidy_model_men <- tidy(robust_mdl_men)
@@ -2119,7 +2186,8 @@ Results from robust and OLS regressions are similar. In both models, ferritin le
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
-lm7_num_std <- lm(log_ferr~ age + BMI + don_ct + don_ct_2+ log_last_don + smoking + iron + red_meat_n + wine_n + beer_n, test_data_2_std)
+lm7_num_std <- lm(log_ferr~ age + BMI + don_ct + don_ct_2+ log_last_don + smoking + 
+                    iron + red_meat_n + wine_n + beer_n, test_data_2_std)
 
 bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
 
@@ -2140,7 +2208,8 @@ plot_data_lm7_men <- data_frame(regressor = names(plotdata@first),
 ```{r }
 
 ggpairs(test_data_std, 
-        columns = c("log_sTfR", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", "log_last_don", "smoking","iron"),
+        columns = c("log_sTfR", "age", "log_CRP",  "BMI", "don_ct", "don_ct_2", 
+                    "log_last_don", "smoking","iron"),
          lower = list(continuous = wrap("points", alpha = 0.3,size=0.1),
                       combo = wrap("facethist", binwidth = 0.5)),
         progress = FALSE)
@@ -2152,7 +2221,10 @@ ggpairs(test_data_std,
 
 # we run the sTfR mdoels here to take advanatge of the pre-processing
 
-lm7_men_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std )
+lm7_men_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 + 
+                    log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n +
+                    milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, 
+                  test_data_std )
 
 ```
 
@@ -2161,7 +2233,8 @@ lm7_men_sTfR <-lm(log_sTfR ~ age + BMI + log_CRP + smoking  + don_ct + don_ct_2 
 ```{r, warning=FALSE}
 test_data_std %>%
    # rowid_to_column("ID") %>%
-  mutate(outlier = ifelse(ID == 465 | ID == 91 | ID == 692 | ID == 342 | ID == 55 | ID == 339, TRUE, FALSE)) -> test_data_std
+  mutate(outlier = ifelse(ID == 465 | ID == 91 | ID == 692 | ID == 342 | ID == 55 | ID == 339, 
+                          TRUE, FALSE)) -> test_data_std
 
 autoplot(lm7_men_sTfR, data = test_data_std, 
          which = c(1:6), 
@@ -2188,7 +2261,9 @@ pre_menop_diag_plot
 
 ```{r, warning =  FALSE}
 # Run model 
-robust_mdl_sTfR_men <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking   + don_ct + don_ct_2 + log_last_don + iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n +  coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
+robust_mdl_sTfR_men <- rlm(log_sTfR ~ age + BMI + log_CRP + smoking   + don_ct + don_ct_2 + log_last_don +
+                             iron + red_meat_n + vegetables_n + fruit_berries_n + milk_n + fruit_juices_n + 
+                             coffee_n +  tea_n + beer_n + wine_n + liquor_n, test_data_std, maxit = 40)
 
 #Tidy output
 tidy_mdl <- tidy(robust_mdl_sTfR_men)
@@ -2249,7 +2324,8 @@ The R² is smaller than the one obtained for ferritin for the same demographic g
 test_data_2_std<- test_data_std %>% 
   mutate(smoking = ifelse(smoking == "no", 0,1)) 
 
-lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking  + red_meat_n + wine_n + beer_n + milk_n, test_data_2_std)
+lm7_num_std <- lm(log_sTfR ~ age + BMI + don_ct + log_CRP +  log_last_don + smoking  + red_meat_n + 
+                    wine_n + beer_n + milk_n, test_data_2_std)
 
 bootresult <- boot.relimp(lm7_num_std, b = 1000, type = c("pmvd", "last",  "first"), fixed = FALSE)
 
@@ -2382,7 +2458,8 @@ get_bootstrap_coeffs <- function(blood_data_summary_reg, current_group, outcome,
   ## preprocess and standardize data
   test_data_std <- blood_data_summary_reg %>% 
     filter(group == current_group) %>% 
-    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n ) %>% 
+    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, 
+                  tea_n, coffee_n, beer_n, wine_n, liquor_n ) %>% 
     gather(key = key, value = value, -donor) %>% 
     group_by(key) %>% 
     mutate(value = scale(value, scale = FALSE)[,1]) %>% 
@@ -2390,7 +2467,8 @@ get_bootstrap_coeffs <- function(blood_data_summary_reg, current_group, outcome,
   
   test_data_std <- blood_data_summary_reg %>% 
     filter(group == current_group) %>% 
-    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct,log_last_don,smoking, pregnancy, iron) %>% 
+    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct,log_last_don,smoking, 
+                  pregnancy, iron) %>% 
   mutate(age = age / 5, 
          age = scale(age, scale = FALSE)[,1],
          log_CRP = scale(log_CRP, scale = FALSE)[,1],
@@ -2701,7 +2779,8 @@ get_bootstrap_coeffs <- function(blood_data_summary_reg, current_group, outcome,
   ## preprocess and standardize data
   test_data_std <- blood_data_summary_reg %>% 
     filter(group == current_group) %>% 
-    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n ) %>% 
+    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, tea_n, 
+                  coffee_n, beer_n, wine_n, liquor_n ) %>% 
     gather(key = key, value = value, -donor) %>% 
     group_by(key) %>% 
     mutate(value = scale(value, scale = FALSE)[,1]) %>% 
@@ -2709,7 +2788,8 @@ get_bootstrap_coeffs <- function(blood_data_summary_reg, current_group, outcome,
   
   test_data_std <- blood_data_summary_reg %>% 
     filter(group == current_group) %>% 
-    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct,log_last_don,smoking, pregnancy, iron) %>% 
+    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct,log_last_don,smoking, 
+                  pregnancy, iron) %>% 
   mutate(age = age / 5, 
          age = scale(age, scale = FALSE)[,1],
          log_CRP = scale(log_CRP, scale = FALSE)[,1],
@@ -2961,7 +3041,8 @@ preprocess_data <- function(blood_data_summary_reg, current_group){
     ## preprocess and standardize data
   test_data_std <- blood_data_summary_reg %>% 
     filter(group == current_group) %>% 
-    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, tea_n, coffee_n, beer_n, wine_n, liquor_n ) %>% 
+    dplyr::select(donor ,red_meat_n, fruit_berries_n, vegetables_n, milk_n, fruit_juices_n, tea_n, 
+                  coffee_n, beer_n, wine_n, liquor_n ) %>% 
     gather(key = key, value = value, -donor) %>% 
     group_by(key) %>% 
     mutate(value = scale(value, scale = TRUE)[,1]) %>% 
@@ -2969,7 +3050,8 @@ preprocess_data <- function(blood_data_summary_reg, current_group){
   
   test_data_std <- blood_data_summary_reg %>% 
     filter(group == current_group) %>% 
-    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct, log_last_don, smoking, pregnancy, iron) %>% 
+    dplyr::select(donor, log_ferr, log_sTfR, age, log_CRP, BMI, don_ct, log_last_don, smoking, 
+                  pregnancy, iron) %>% 
   mutate(age = age / 5, 
          age = scale(age, scale = TRUE)[,1],
          log_CRP = scale(log_CRP, scale = TRUE)[,1],
@@ -3176,33 +3258,6 @@ stargazer(robust_mdl_pre_menop_w, robust_mdl_post_menop_w, robust_mdl_men,
           digits = 3)
 ```
 
-```{r, results='asis'}
-stargazer(robust_mdl_pre_menop_w, robust_mdl_post_menop_w, robust_mdl_men,
-          style = "all", 
-          intercept.bottom = FALSE,
-          title = "Table 2 - Multivariate robust regression analyses - Ferritin",
-          type = "html",
-          # se = TRUE,
-          single.row = TRUE,
-          ci = TRUE,
-          ci.custom = CI_regression_robust,
-          p = robust_p_values,
-          omit = "Constant",
-          header = FALSE,
-          covariate.labels = c("Age", "BMI", "ln(CRP)", "Smoking(yes)", "Pregnancy(Yes)",
-                       "Nb donations (2 years)","(Nb donations (2 years))²", "ln(Days since last donation)",
-                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
-                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
-          dep.var.caption   = "Ferritin (log)", 
-          dep.var.labels.include = FALSE,
-          column.labels = c("Pre-menopausal women", "Post-menopausal women", "Men"),
-          # column.separate = c(2, 2,2),
-          model.numbers= FALSE,
-          report=('vcsp'),
-          star.cutoffs = c(0.05, 0.01, 0.001),
-          digits = 3)
-```
-
 - 
 
 #### Table 3 - Outcome = sTfR
@@ -3258,33 +3313,6 @@ stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_
           digits = 3)
 ```
 
-```{r, results='asis'}
-stargazer(robust_mdl_sTfR_pre_menop_w, robust_mdl_sTfR_post_menop_w, robust_mdl_sTfR_men,
-          style = "all", 
-          intercept.bottom = FALSE,
-          title = "Table 3 - Multivariable robust regression analyses - sTfR",
-          type = "html",
-          # se = TRUE,
-          single.row = TRUE,
-          ci = TRUE,
-          ci.custom = CI_regression_robust,
-          p = robust_p_values,
-          omit = "Constant",
-          header = FALSE,
-          covariate.labels = c("Age", "BMI", "ln(CRP)", "Smoking(yes)", "Pregnancy(Yes)",
-                       "Nb donations (2 years)","(Nb donations (2 years))²", "ln(Days since last donation)",
-                        "iron supplementation", "Red meat","Vegetables", "Fruit and Berries", "Milk",
-                         "Fruit Juices", "Coffee","Tea", "Beer", "Wine" , "Liquor"),
-          dep.var.caption   = "Ferritin (log)", 
-          dep.var.labels.include = FALSE,
-          column.labels = c("Pre-menopausal women", "Post-menopausal women", "Men"),
-          # column.separate = c(2, 2,2),
-          model.numbers= FALSE,
-          report=('vcsp'),
-          star.cutoffs = c(0.05, 0.01, 0.001),
-          digits = 3)
-```
-
 -
 
 #### Figure 2 
@@ -3300,8 +3328,8 @@ The bootstrapped coefficients that are displayed are the standardized coefficien
 bootstrap_distrib_robust_std %>% 
   mutate(regressor = plyr::revalue(regressor, regressor_values),
   regressor = ordered(regressor,
-                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)","(Nb donations (2 years))²", 
-                              "Days since last donation",  "Iron supplementation", 
+                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)",
+                              "(Nb donations (2 years))²", "Days since last donation",  "Iron supplementation", 
                               "Red meat","Vegetables", "Fruit and Berries", "Milk",
                          "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
   regressor = fct_rev(regressor),
@@ -3343,7 +3371,8 @@ ggplot2::ggsave("../results/figures/Figure_2_coeffs_Ferritin.png",device = "png"
 test <- bootstrap_distrib_robust_std_sTfR %>% 
   mutate(regressor = plyr::revalue(regressor, regressor_values),
   regressor = ordered(regressor,
-                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)","(Nb donations (2 years))²", 
+                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)",
+                              "(Nb donations (2 years))²", 
                               "Days since last donation",  "Iron supplementation", 
                               "Red meat","Vegetables", "Fruit and Berries", "Milk",
                          "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
@@ -3356,7 +3385,8 @@ test <- bootstrap_distrib_robust_std_sTfR %>%
 bootstrap_distrib_robust_std_sTfR %>% 
   mutate(regressor = plyr::revalue(regressor, regressor_values),
   regressor = ordered(regressor,
-                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)","(Nb donations (2 years))²", 
+                  levels =  c("Age", "BMI", "CRP (log)",  "Smoking",  "Pregnancy","Nb donations (2 years)",
+                              "(Nb donations (2 years))²", 
                               "Days since last donation",  "Iron supplementation", 
                               "Red meat","Vegetables", "Fruit and Berries", "Milk",
                          "Fruit Juices", "Coffee", "Tea", "Beer", "Wine" , "Liquor")),
@@ -3432,13 +3462,14 @@ plt <- relativ_impo_data %>%
   regressor == "red_meat_n" ~"Red meat",
   TRUE ~regressor)) %>% 
   mutate(regressor = ordered(regressor, 
-                  levels = c("Wine", "Beer", "Red meat", "Milk", "Iron supplementation",  "Time since last donation", 
-                             "(Nb donations (2 years))²", "Nb donations (2 years)", "Smoking", "CRP", "BMI",  "Age"))) %>%
+                  levels = c("Wine", "Beer", "Red meat", "Milk", "Iron supplementation",  
+                             "Time since last donation",  "(Nb donations (2 years))²",
+                             "Nb donations (2 years)","Smoking", "CRP", "BMI",  "Age"))) %>%
   mutate(group_2 = case_when(
     group == "Pre_menopause_women" ~ "Pre-menopausal women",
     group == "Post_menopause_women" ~ "Post-menopausal women",
     TRUE ~ "Men"),
-          group_2 = ordered(group_2, levels = c(  "Men", "Post-menopausal women", "Pre-menopausal women") )) %>% 
+    group_2 = ordered(group_2, levels = c(  "Men", "Post-menopausal women", "Pre-menopausal women") )) %>% 
   ggplot(aes(x=regressor, y = lmg, fill = group_2)) +
   geom_col(position = dodge) +
   geom_linerange(aes( ymin=lmg_inf, ymax = lmg_sup), position = dodge, size = 0.4, color = "dark grey") +
@@ -3460,7 +3491,8 @@ plt <- relativ_impo_data %>%
 
 plt 
 
-ggplot2::ggsave("../results/figures/figure_2_rela_impo_ferritin.svg", plt,  height = 6.75 * 1.25, width = 6.75 * 1.25, units = "cm", dpi = 300 )
+ggplot2::ggsave("../results/figures/figure_2_rela_impo_ferritin.svg", plt,  height = 6.75 * 1.25, 
+                width = 6.75 * 1.25, units = "cm", dpi = 300 )
 ```
 
 ###### sTfR
@@ -3502,8 +3534,9 @@ plt <- relativ_impo_data_sTfR %>%
   regressor == "beer_n" ~ "Beer",
   TRUE ~regressor)) %>% 
   mutate(regressor = ordered(regressor, 
-                  levels = c("Wine", "Beer", "Red meat", "Milk", "Iron supplementation",  "Time since last donation", 
-                             "(Nb donations (2 years))²", "Nb donations (2 years)", "Smoking", "CRP", "BMI",  "Age"))) %>%
+                  levels = c("Wine", "Beer", "Red meat", "Milk", "Iron supplementation",  
+                             "Time since last donation",  "(Nb donations (2 years))²",
+                             "Nb donations (2 years)", "Smoking", "CRP", "BMI",  "Age"))) %>%
   mutate(group_2 = case_when(
     group == "Pre_menopause_women" ~ "Pre-menopausal women",
     group == "Post_menopause_women" ~ "Post-menopausal women",
@@ -3530,7 +3563,8 @@ plt <- relativ_impo_data_sTfR %>%
 
 plt 
 
-ggplot2::ggsave("../results/figures/figure_2_rela_impo_sTfR.svg", plt,  height = 6.75 * 1.25, width = 6.75 * 1.25, units = "cm", dpi = 300 )
+ggplot2::ggsave("../results/figures/figure_2_rela_impo_sTfR.svg", plt,  height = 6.75 * 1.25, width = 6.75 * 1.25,
+                units = "cm", dpi = 300 )
 ```
 
 #### Figure 3 : Effects of main predictors of interest 
@@ -3870,8 +3904,10 @@ We first display the distribution of answers to the self-reported health questio
 ```{r fig.show="80%"}
 plt1 <- blood_data_summary_final %>% 
   dplyr::select(donor, group, self_perceived_health) %>% 
- mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", as.character(self_perceived_health)),
-         self_perceived_health = ordered(self_perceived_health, levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
+ mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good",
+                                       as.character(self_perceived_health)),
+         self_perceived_health = ordered(self_perceived_health, 
+                                         levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
   mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal \n women",
          group == "Post_menopause_women" ~ "Post-menopausal \n women",
          TRUE ~ "Men"),
@@ -3905,7 +3941,8 @@ plt1 <- blood_data_summary_final %>%
 
 plt1
 
-ggplot2::ggsave("../results/figures/supp_figure_4_health.png", plt1,  height = 6.5 * 1.25, width = 10 * 1.25, units = "cm", dpi = 300 )
+ggplot2::ggsave("../results/figures/supp_figure_4_health.png", plt1,  height = 6.5 * 1.25, 
+                width = 10 * 1.25, units = "cm", dpi = 300 )
 ```
 
 ## Figure 4 - Relationship between ferritin and self-reported health
@@ -3913,8 +3950,10 @@ ggplot2::ggsave("../results/figures/supp_figure_4_health.png", plt1,  height = 6
 ```{r}
 
 plt <- blood_data_summary_final %>%
-  mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", as.character(self_perceived_health)),
-         self_perceived_health = ordered(self_perceived_health, levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
+  mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good",
+                                        as.character(self_perceived_health)),
+         self_perceived_health = ordered(self_perceived_health, 
+                                         levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
   mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal \n women",
          group == "Post_menopause_women" ~ "Post-menopausal \n women",
          TRUE ~ "Men"),
@@ -3955,7 +3994,8 @@ plt <- blood_data_summary_final %>%
 
 plt
 
-ggplot2::ggsave("../results/figures/figure_4_health.png", plt,  height = 8.5 * 1.25, width = 6.38 * 1.25, units = "cm", dpi = 300 )
+ggplot2::ggsave("../results/figures/figure_4_health.png", plt,  height = 8.5 * 1.25, 
+                width = 6.38 * 1.25, units = "cm", dpi = 300 )
 
 ```
 
@@ -3977,8 +4017,10 @@ It seems to be mosty the case.
 blood_data_summary_reg %>%
   dplyr::select(donor,  group, self_perceived_health, age, BMI, don_ct) %>% 
   gather(key = measure, value = value, -donor, -group, -self_perceived_health) %>% 
-    mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", as.character(self_perceived_health)),
-         self_perceived_health = ordered(self_perceived_health, levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
+    mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", 
+                                          as.character(self_perceived_health)),
+         self_perceived_health = ordered(self_perceived_health, 
+                                         levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
     mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal \n women",
          group == "Post_menopause_women" ~ "Post-menopausal \n women",
          TRUE ~ "Men"),
@@ -4013,12 +4055,16 @@ blood_data_summary_reg %>%
 blood_data_summary_reg %>%
   dplyr::select(donor,  group, self_perceived_health,  physical_act_daily_n, physical_act_freq_n) %>% 
   gather(key = measure, value = value, -donor, -group, -self_perceived_health) %>% 
-  mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", as.character(self_perceived_health)),
-         self_perceived_health = ordered(self_perceived_health, levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
+  mutate(self_perceived_health = ifelse(self_perceived_health == "Very_good", "Very good", 
+                                        as.character(self_perceived_health)),
+         self_perceived_health = ordered(self_perceived_health, 
+                                         levels = c("Satisfactory", "Good", "Very good", "Excellent"))) %>% 
   mutate(group = case_when(group == "Pre_menopause_women" ~ "Pre-menopausal \n women",
          group == "Post_menopause_women" ~ "Post-menopausal \n women",
          TRUE ~ "Men")) %>% 
-  mutate(measure = ifelse(measure == "physical_act_daily_n", "Physical activity \n Daily amount", "Physical activity \n Frequency")) %>%
+  mutate(measure = ifelse(measure == "physical_act_daily_n", 
+                          "Physical activity \n Daily amount", 
+                          "Physical activity \n Frequency")) %>%
   ggplot(aes(x = self_perceived_health, y = value, color = group)) +
   geom_boxplot(outlier.alpha = 0, alpha = 0) +
   geom_jitter(alpha = 0.2, shape = 1, 
@@ -4051,7 +4097,8 @@ ordinal_data_temp <-
   filter(group != "Men") %>% 
   mutate(menopausal_status = ifelse(group == "Pre_menopause_women", 0, 1) ) %>% 
   mutate(age = age/5) %>% 
-  dplyr::select(self_perceived_health, menopausal_status,  age,  BMI, log_CRP, don_ct, log_last_don,  Ferritin, TransferrinR, smoking, physical_act_daily_n,  physical_act_freq_n) %>% 
+  dplyr::select(self_perceived_health, menopausal_status,  age,  BMI, log_CRP, don_ct,
+                log_last_don,  Ferritin, TransferrinR, smoking, physical_act_daily_n,  physical_act_freq_n) %>% 
   rename(sTfR = TransferrinR) %>% 
   mutate(log_Ferritin = log(Ferritin)/log(2),
          age = scale(age, scale = FALSE)[,1],
@@ -4092,7 +4139,8 @@ sf <- function(y)
     'Y>2' = qlogis(mean(y>2)),
     'Y>3' = qlogis(mean(y>3)))
 
-s <- summary(X5_num ~ menopausal_status + age + BMI + log_CRP + don_ct  + log_last_don  + smoking +  physical_act_freq_n +  physical_act_daily_n + log_Ferritin,
+s <- summary(X5_num ~ menopausal_status + age + BMI + log_CRP + don_ct  + log_last_don  +
+               smoking +  physical_act_freq_n +  physical_act_daily_n + log_Ferritin,
              fun = sf, 
              data = ordinal_data_temp)
 
@@ -4116,8 +4164,9 @@ dd <- datadist(ordinal_data_temp)
 options(datadist="dd")
 
 
-fit_women <- lrm(self_perceived_health ~ menopausal_status + age +  BMI + log_CRP + smoking +  don_ct + log_last_don  +
-             physical_act_daily_n + physical_act_freq_n  + log_Ferritin, 
+fit_women <- lrm(self_perceived_health ~ menopausal_status + age +  BMI + log_CRP + 
+                  smoking +  don_ct + log_last_don  +
+                  physical_act_daily_n + physical_act_freq_n  + log_Ferritin, 
            data = ordinal_data_temp,
               x = TRUE, y = TRUE)
 ```
@@ -4260,11 +4309,12 @@ We use brms to run a bayesian fit of the same regression model. We compute LOO t
 
 
 ```{r}
-ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status + age +  BMI + log_CRP + smoking +  don_ct + log_last_don  +
-             physical_act_daily_n + physical_act_freq_n  + log_Ferritin,  
-                   data = ordinal_data_temp,
-                   family = cumulative,
-                   save_all_pars = TRUE)
+ordinal_fit_B_women <- brm(formula = self_perceived_health ~  menopausal_status + age +  BMI + log_CRP + 
+                                      smoking +  don_ct + log_last_don  +
+                                      physical_act_daily_n + physical_act_freq_n  + log_Ferritin,  
+                            data = ordinal_data_temp,
+                            family = cumulative,
+                            save_all_pars = TRUE)
 ```
 
 
@@ -4320,11 +4370,12 @@ Model comparison using Bayes Factors in non trivial when using ordinal models. W
 We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor. 
 
 ```{r message=FALSE, warning=FALSE, }
-ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_status + age + BMI +  log_CRP + smoking + don_ct   +
-                                 log_last_don + physical_act_daily_n + physical_act_freq_n ,
-                   data = ordinal_data_temp,
-                   family = cumulative,
-                   save_all_pars = TRUE)
+ordinal_fit_restricted <- brm(formula = self_perceived_health ~ menopausal_status + age + BMI +  
+                                        log_CRP + smoking + don_ct   +
+                                        log_last_don + physical_act_daily_n + physical_act_freq_n ,
+                              data = ordinal_data_temp,
+                              family = cumulative,
+                              save_all_pars = TRUE)
 
 ```
 
@@ -4383,7 +4434,8 @@ sf <- function(y)
     'Y>2' = qlogis(mean(y>2)),
     'Y>3' = qlogis(mean(y>3)))
 
-s <- summary(X5_num ~ age + BMI + log_CRP + don_ct + log_last_don + log_Ferritin + smoking +  
+s <- summary(X5_num ~ age + BMI + log_CRP + don_ct + log_last_don + 
+               log_Ferritin + smoking +  
                physical_act_freq_n +  physical_act_daily_n,
              fun = sf, 
              data = ordinal_data_temp)
@@ -4428,7 +4480,7 @@ stargazer(fit_men,
           covariate.labels = c("Health > Good","Health > Very Good", "Health > Excellent",
                                "age", "BMI", "CRP (log)", "Smoking(yes)",
                                "Nb donations (2 years)", "Nb of days since last donation (log)", 
-                                "Daily Physical Activity", "Physical activity frequency", "ln(Ferritin)/ln(2)"),
+                               "Daily Physical Activity", "Physical activity frequency", "ln(Ferritin)/ln(2)"),
            dep.var.caption   = "Self-rated health", 
           dep.var.labels.include = FALSE,
           # column.labels = c("All observations", "Influential removed"),
@@ -4517,7 +4569,6 @@ ordinal_regression_coefficients_men <-
     rownames_to_column() %>% 
     gather(key = regressor, value = coefficient, -rowname) %>% 
     filter(!regressor %in% c("y>=Good", "y>=Very_good", "y>=Excellent" ) ) %>% 
-    # mutate(regressor = ifelse(regressor == "smoking=yes", "smoking_yes", regressor )) %>% 
     rename(conf_int = rowname) %>% 
     spread(key = conf_int, value = coefficient) %>% 
     full_join(ordinal_regression_coefficients, by = "regressor") 
@@ -4544,11 +4595,12 @@ regress_coeff_health[[2]] <- exp(boot_object$coefficients)
 #### Ordinal model Bayesian fit
 
 ```{r}
-ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP + smoking +  don_ct + log_last_don  +
-             physical_act_daily_n + physical_act_freq_n  + log_Ferritin,  
-                   data = ordinal_data_temp,
-                   family = cumulative,
-                   save_all_pars = TRUE)
+ordinal_fit_B_men <- brm(formula = self_perceived_health ~  age +  BMI + log_CRP + smoking + 
+                                  don_ct + log_last_don  +
+                                  physical_act_daily_n + physical_act_freq_n  + log_Ferritin,  
+                         data = ordinal_data_temp,
+                         family = cumulative,
+                         save_all_pars = TRUE)
 
 ```
 
@@ -4602,11 +4654,12 @@ stan_ess(ordinal_fit_B_men$fit)
 We use LOO (Leave-One-Out cross validation). We compare a restricted model without Ferritin as a predictor and a full model with Ferritin as a predictor. 
 
 ```{r message=FALSE, warning=FALSE}
-ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  log_CRP + smoking + don_ct   +
-                                 log_last_don + physical_act_daily_n + physical_act_freq_n ,
-                   data = ordinal_data_temp,
-                   family = cumulative,
-                   save_all_pars = TRUE)
+ordinal_fit_restricted <- brm(formula = self_perceived_health ~ age + BMI +  
+                                        log_CRP + smoking + don_ct   +
+                                        log_last_don + physical_act_daily_n + physical_act_freq_n ,
+                              data = ordinal_data_temp,
+                              family = cumulative,
+                              save_all_pars = TRUE)
 
 ```
 
