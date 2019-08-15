@@ -1,4 +1,4 @@
-This repository contains R code to reproduce the analyses for the manuscript *The effect of donation activity dwarfs the effect of lifestyle, diet and iron supplementation on blood donor iron stores* by Lobier M., Niittymäki P., Castrén J., Palokongas E., Partanen J., and Arvas M. 
+This repository contains R code to reproduce the analyses for the manuscript *The effect of donation activity dwarfs the effect of lifestyle, diet and iron supplementation on blood donor iron stores* (https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0220862) by Lobier M., Niittymäki P., Castrén J., Palokongas E., Partanen J., and Arvas M. 
 
 The code is included as a single .Rmd file.
 
